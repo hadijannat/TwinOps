@@ -93,6 +93,8 @@ logs/
 *.sqlite
 *.db
 AGENTS.md
+CLAUDE.md
+.claude/
 
 # Audit logs (contain sensitive operation data)
 audit_logs/

@@ -19,15 +19,31 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
 jobs:
   validate:
     name: Validate Deployment
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
     outputs:
       image-tag: ${{ steps.resolve.outputs.tag }}
 
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Resolve image tag
         id: resolve
@@ -42,8 +58,11 @@ jobs:
 
       - name: Verify images exist
         run: |
+          set -euo pipefail
           for service in agent sandbox opservice; do
-            echo "Checking ghcr.io/${{ github.repository_owner }}/twinops-${service}:${{ steps.resolve.outputs.tag }}"
+            IMAGE="ghcr.io/${{ github.repository_owner }}/twinops-${service}:${{ steps.resolve.outputs.tag }}"
+            echo "Checking ${IMAGE}"
+            docker buildx imagetools inspect "${IMAGE}" > /dev/null
           done
 
   deploy-staging:
@@ -52,6 +71,7 @@ jobs:
     needs: validate
     if: inputs.environment == 'staging'
     environment: staging
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -108,8 +128,25 @@ jobs:
 
       - name: Run smoke tests
         run: |
+          set -euo pipefail
+
+          get_lb_host() {
+            for _ in {1..30}; do
+              host=$(kubectl -n twinops-staging get svc agent \
+                -o jsonpath='{.status.loadBalancer.ingress[0].ip}{.status.loadBalancer.ingress[0].hostname}')
+              if [ -n "${host}" ]; then
+                echo "${host}"
+                return 0
+              fi
+              sleep 10
+            done
+            echo "LoadBalancer address not ready" >&2
+            exit 1
+          }
+
           # Get service URL
-          AGENT_URL=$(kubectl -n twinops-staging get svc agent -o jsonpath='{.status.loadBalancer.ingress[0].ip}'):8080
+          AGENT_HOST=$(get_lb_host)
+          AGENT_URL="${AGENT_HOST}:8080"
 
           # Health check
           curl -f http://${AGENT_URL}/health || exit 1
@@ -122,6 +159,7 @@ jobs:
     needs: validate
     if: inputs.environment == 'production'
     environment: production
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -185,7 +223,24 @@ jobs:
 
       - name: Run production smoke tests
         run: |
-          AGENT_URL=$(kubectl -n twinops get svc agent -o jsonpath='{.status.loadBalancer.ingress[0].ip}'):8080
+          set -euo pipefail
+
+          get_lb_host() {
+            for _ in {1..30}; do
+              host=$(kubectl -n twinops get svc agent \
+                -o jsonpath='{.status.loadBalancer.ingress[0].ip}{.status.loadBalancer.ingress[0].hostname}')
+              if [ -n "${host}" ]; then
+                echo "${host}"
+                return 0
+              fi
+              sleep 10
+            done
+            echo "LoadBalancer address not ready" >&2
+            exit 1
+          }
+
+          AGENT_HOST=$(get_lb_host)
+          AGENT_URL="${AGENT_HOST}:8080"
 
           # Health check
           curl -f http://${AGENT_URL}/health || exit 1
