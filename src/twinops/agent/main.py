@@ -827,17 +827,7 @@ class AgentServer:
                                                 "reply": {"type": "string"},
                                                 "tool_results": {
                                                     "type": "array",
-                                                    "items": {
-                                                        "type": "object",
-                                                        "properties": {
-                                                            "tool": {"type": "string"},
-                                                            "success": {"type": "boolean"},
-                                                            "result": {},
-                                                            "error": {"type": "string"},
-                                                            "simulated": {"type": "boolean"},
-                                                            "status": {"type": "string"},
-                                                        },
-                                                    },
+                                                    "items": {"$ref": "#/components/schemas/ToolResult"},
                                                 },
                                                 "pending_approval": {"type": "boolean"},
                                                 "task_id": {"type": "string"},
@@ -986,16 +976,7 @@ class AgentServer:
                                             "properties": {
                                                 "tasks": {
                                                     "type": "array",
-                                                    "items": {
-                                                        "type": "object",
-                                                        "properties": {
-                                                            "task_id": {"type": "string"},
-                                                            "tool": {"type": "string"},
-                                                            "risk": {"type": "string"},
-                                                            "status": {"type": "string"},
-                                                            "created_at": {"type": "number"},
-                                                        },
-                                                    },
+                                                    "items": {"$ref": "#/components/schemas/Task"},
                                                 },
                                                 "count": {"type": "integer"},
                                             },
@@ -1236,7 +1217,7 @@ class AgentServer:
                                         "schema": {
                                             "type": "object",
                                             "properties": {
-                                                "task": {"type": "object"},
+                                                "task": {"$ref": "#/components/schemas/Task"},
                                             },
                                         }
                                     }
@@ -1309,7 +1290,10 @@ class AgentServer:
                                             "type": "object",
                                             "properties": {
                                                 "reply": {"type": "string"},
-                                                "tool_results": {"type": "array"},
+                                                "tool_results": {
+                                                    "type": "array",
+                                                    "items": {"$ref": "#/components/schemas/ToolResult"},
+                                                },
                                             },
                                         }
                                     }
@@ -1402,7 +1386,47 @@ class AgentServer:
                             }
                         },
                         "required": ["error"],
-                    }
+                    },
+                    "Task": {
+                        "type": "object",
+                        "additionalProperties": True,
+                        "properties": {
+                            "task_id": {"type": "string"},
+                            "tool": {"type": "string"},
+                            "risk": {"type": "string"},
+                            "status": {"type": "string"},
+                            "created_at": {"type": "number"},
+                            "requested_by_roles": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "args": {"type": "object"},
+                            "safety_reasoning": {"type": "string"},
+                            "simulate_result": {"type": "object"},
+                            "action_id": {"type": "string"},
+                            "approved_by": {"type": "string"},
+                            "approved_at": {"type": "number"},
+                            "rejected_by": {"type": "string"},
+                            "rejected_at": {"type": "number"},
+                            "rejection_reason": {"type": "string"},
+                            "status_reason": {"type": "string"},
+                        },
+                        "required": ["task_id", "status"],
+                    },
+                    "ToolResult": {
+                        "type": "object",
+                        "additionalProperties": True,
+                        "properties": {
+                            "tool": {"type": "string"},
+                            "success": {"type": "boolean"},
+                            "result": {},
+                            "error": {"type": "string"},
+                            "simulated": {"type": "boolean"},
+                            "status": {"type": "string"},
+                            "job_id": {"type": "string"},
+                        },
+                        "required": ["tool", "success", "status"],
+                    },
                 },
                 "securitySchemes": {
                     "mutualTLS": {

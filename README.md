@@ -598,6 +598,12 @@ twinops/
 
 ---
 
+### CI/CD Notes
+
+- Container scans in `.github/workflows/security.yml` are skipped for docs-only PRs; they still run on schedules and when Docker/runtime files change.
+
+---
+
 ## 📚 References
 
 - [BaSyx Wiki - MQTT Feature](https://wiki.basyx.org/en/latest/content/user_documentation/basyx_components/v2/aas_repository/features/mqtt.html)
