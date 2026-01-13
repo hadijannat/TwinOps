@@ -18,6 +18,7 @@ from twinops.agent.policy_signing import (
 from twinops.agent.shadow import ShadowTwinManager
 from twinops.agent.twin_client import TwinClient
 from twinops.common.logging import get_logger
+from twinops.common.http import get_request_id, get_subject
 
 try:
     import fcntl
@@ -177,6 +178,13 @@ class AuditLogger:
             entry["error"] = error
 
         entry.update(extra)
+
+        request_id = get_request_id()
+        subject = get_subject()
+        if request_id and "request_id" not in entry:
+            entry["request_id"] = request_id
+        if subject and "subject" not in entry:
+            entry["subject"] = subject
 
         with open(self._log_path, "a+b") as f:
             self._acquire_lock(f)

@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import contextvars
 import uuid
 
+import structlog
+
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -39,6 +41,8 @@ _subject_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 def set_request_id(value: str | None) -> None:
     """Set request id in context."""
     _request_id_var.set(value)
+    if value is not None:
+        structlog.contextvars.bind_contextvars(request_id=value)
 
 
 def get_request_id() -> str | None:
@@ -49,6 +53,8 @@ def get_request_id() -> str | None:
 def set_subject(value: str | None) -> None:
     """Set current subject in context."""
     _subject_var.set(value)
+    if value is not None:
+        structlog.contextvars.bind_contextvars(subject=value)
 
 
 def get_subject() -> str | None:
@@ -68,6 +74,9 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         request.state.request_id = request_id
         set_request_id(request_id)
 
-        response = await call_next(request)
-        response.headers.setdefault(self._header_name, request_id)
-        return response
+        try:
+            response = await call_next(request)
+            response.headers.setdefault(self._header_name, request_id)
+            return response
+        finally:
+            structlog.contextvars.clear_contextvars()
