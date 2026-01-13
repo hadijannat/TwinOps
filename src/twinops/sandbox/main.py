@@ -434,11 +434,6 @@ def create_app(settings: Settings | None = None) -> Starlette:
         Route("/submodels", server.handle_get_submodels, methods=["GET"]),
         Route("/submodels/{sm_id}", server.handle_get_submodel, methods=["GET"]),
         Route(
-            "/submodels/{sm_id}/submodel-elements/{path:path}",
-            server.handle_get_element,
-            methods=["GET"],
-        ),
-        Route(
             "/submodels/{sm_id}/submodel-elements/{path:path}/$value",
             server.handle_get_value,
             methods=["GET"],
@@ -447,6 +442,11 @@ def create_app(settings: Settings | None = None) -> Starlette:
             "/submodels/{sm_id}/submodel-elements/{path:path}/$value",
             server.handle_set_value,
             methods=["PUT"],
+        ),
+        Route(
+            "/submodels/{sm_id}/submodel-elements/{path:path}",
+            server.handle_get_element,
+            methods=["GET"],
         ),
         # Health
         Route("/health", server.handle_health, methods=["GET"]),
