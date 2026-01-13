@@ -846,9 +846,46 @@ class AgentServer:
                                     }
                                 },
                             },
-                            "400": {"description": "Invalid request"},
-                            "429": {"description": "Rate limit exceeded"},
-                            "503": {"description": "Service unavailable"},
+                            "400": {
+                                "description": "Invalid request",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                            "401": {
+                                "description": "Unauthorized",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                            "403": {
+                                "description": "Forbidden",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                            "429": {
+                                "description": "Rate limit exceeded",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                            "503": {
+                                "description": "Service unavailable",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
                         },
                     }
                 },
@@ -899,7 +936,14 @@ class AgentServer:
                                     }
                                 },
                             },
-                            "503": {"description": "Service not ready"},
+                            "503": {
+                                "description": "Service not ready",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
                         },
                     }
                 },
@@ -959,7 +1003,30 @@ class AgentServer:
                                     }
                                 },
                             },
-                            "503": {"description": "Service unavailable"},
+                            "401": {
+                                "description": "Unauthorized",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                            "403": {
+                                "description": "Forbidden",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                            "503": {
+                                "description": "Service unavailable",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
                         },
                     }
                 },
@@ -1017,8 +1084,38 @@ class AgentServer:
                                     }
                                 },
                             },
-                            "404": {"description": "Task not found or not pending"},
-                            "503": {"description": "Service unavailable"},
+                            "401": {
+                                "description": "Unauthorized",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                            "403": {
+                                "description": "Forbidden",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                            "404": {
+                                "description": "Task not found or not pending",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                            "503": {
+                                "description": "Service unavailable",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
                         },
                     }
                 },
@@ -1081,8 +1178,38 @@ class AgentServer:
                                     }
                                 },
                             },
-                            "404": {"description": "Task not found or not pending"},
-                            "503": {"description": "Service unavailable"},
+                            "401": {
+                                "description": "Unauthorized",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                            "403": {
+                                "description": "Forbidden",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                            "404": {
+                                "description": "Task not found or not pending",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                            "503": {
+                                "description": "Service unavailable",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
                         },
                     }
                 },
@@ -1112,6 +1239,26 @@ class AgentServer:
                 {"name": "Observability", "description": "Monitoring and metrics"},
             ],
             "components": {
+                "schemas": {
+                    "ErrorResponse": {
+                        "type": "object",
+                        "properties": {
+                            "error": {
+                                "type": "object",
+                                "properties": {
+                                    "code": {"type": "string"},
+                                    "message": {"type": "string"},
+                                    "details": {
+                                        "type": "object",
+                                        "additionalProperties": True,
+                                    },
+                                },
+                                "required": ["code", "message"],
+                            }
+                        },
+                        "required": ["error"],
+                    }
+                },
                 "securitySchemes": {
                     "mutualTLS": {
                         "type": "mutualTLS",
