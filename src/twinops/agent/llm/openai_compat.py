@@ -17,6 +17,7 @@ class AnthropicClient(LlmClient):
         api_key: str,
         model: str = "claude-sonnet-4-20250514",
         max_tokens: int = 4096,
+        timeout: float = 30.0,
     ):
         """
         Initialize Anthropic client.
@@ -25,10 +26,14 @@ class AnthropicClient(LlmClient):
             api_key: Anthropic API key
             model: Model identifier
             max_tokens: Maximum tokens in response
+            timeout: Request timeout in seconds
         """
         import anthropic
 
-        self._client = anthropic.AsyncAnthropic(api_key=api_key)
+        self._client = anthropic.AsyncAnthropic(
+            api_key=api_key,
+            timeout=timeout,
+        )
         self._model = model
         self._max_tokens = max_tokens
 
@@ -113,6 +118,7 @@ class OpenAIClient(LlmClient):
         api_key: str,
         model: str = "gpt-4-turbo-preview",
         max_tokens: int = 4096,
+        timeout: float = 30.0,
     ):
         """
         Initialize OpenAI client.
@@ -121,10 +127,14 @@ class OpenAIClient(LlmClient):
             api_key: OpenAI API key
             model: Model identifier
             max_tokens: Maximum tokens in response
+            timeout: Request timeout in seconds
         """
         import openai
 
-        self._client = openai.AsyncOpenAI(api_key=api_key)
+        self._client = openai.AsyncOpenAI(
+            api_key=api_key,
+            timeout=timeout,
+        )
         self._model = model
         self._max_tokens = max_tokens
 

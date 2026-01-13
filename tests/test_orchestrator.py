@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from twinops.agent.orchestrator import AgentOrchestrator
+from twinops.agent.schema_gen import ToolSpec
 
 
 @pytest.fixture
@@ -81,15 +82,17 @@ async def test_tool_execution_with_safety_allowed(
     orchestrator, mock_llm, mock_safety, mock_capabilities, mock_twin_client
 ):
     """Test tool execution when safety allows."""
-    # Configure tool schema
-    tool_schema = {
-        "name": "SetSpeed",
-        "risk_level": "HIGH",
-        "submodel_id": "urn:test:submodel:control",
-        "delegation_url": "http://opservice:8087/operations/SetSpeed",
-        "input_schema": {"RPM": {"type": "number"}},
-    }
-    mock_capabilities.get_tool_by_name.return_value = tool_schema
+    # Configure tool schema as ToolSpec object
+    tool_spec = ToolSpec(
+        name="SetSpeed",
+        description="Set pump speed",
+        input_schema={"properties": {"RPM": {"type": "number"}}, "required": ["RPM"]},
+        submodel_id="urn:test:submodel:control",
+        operation_path="SetSpeed",
+        risk_level="HIGH",
+        delegation_url="http://opservice:8087/operations/SetSpeed",
+    )
+    mock_capabilities.get_tool_by_name.return_value = tool_spec
 
     # Configure LLM to request tool call
     tool_call = MagicMock()
@@ -135,15 +138,17 @@ async def test_tool_execution_with_safety_allowed(
 @pytest.mark.asyncio
 async def test_rbac_denial(orchestrator, mock_llm, mock_safety, mock_capabilities):
     """Test that unauthorized access is denied."""
-    # Configure tool schema
-    tool_schema = {
-        "name": "SetSpeed",
-        "risk_level": "HIGH",
-        "submodel_id": "urn:test:submodel:control",
-        "delegation_url": "http://opservice:8087/operations/SetSpeed",
-        "input_schema": {"RPM": {"type": "number"}},
-    }
-    mock_capabilities.get_tool_by_name.return_value = tool_schema
+    # Configure tool schema as ToolSpec object
+    tool_spec = ToolSpec(
+        name="SetSpeed",
+        description="Set pump speed",
+        input_schema={"properties": {"RPM": {"type": "number"}}, "required": ["RPM"]},
+        submodel_id="urn:test:submodel:control",
+        operation_path="SetSpeed",
+        risk_level="HIGH",
+        delegation_url="http://opservice:8087/operations/SetSpeed",
+    )
+    mock_capabilities.get_tool_by_name.return_value = tool_spec
 
     # Configure LLM to request tool call
     tool_call = MagicMock()
@@ -183,15 +188,17 @@ async def test_rbac_denial(orchestrator, mock_llm, mock_safety, mock_capabilitie
 @pytest.mark.asyncio
 async def test_approval_required(orchestrator, mock_llm, mock_safety, mock_capabilities):
     """Test that critical operations require approval."""
-    # Configure tool schema
-    tool_schema = {
-        "name": "EmergencyStop",
-        "risk_level": "CRITICAL",
-        "submodel_id": "urn:test:submodel:control",
-        "delegation_url": "http://opservice:8087/operations/EmergencyStop",
-        "input_schema": {},
-    }
-    mock_capabilities.get_tool_by_name.return_value = tool_schema
+    # Configure tool schema as ToolSpec object
+    tool_spec = ToolSpec(
+        name="EmergencyStop",
+        description="Emergency stop operation",
+        input_schema={"properties": {}, "required": []},
+        submodel_id="urn:test:submodel:control",
+        operation_path="EmergencyStop",
+        risk_level="CRITICAL",
+        delegation_url="http://opservice:8087/operations/EmergencyStop",
+    )
+    mock_capabilities.get_tool_by_name.return_value = tool_spec
 
     # Configure LLM to request tool call
     tool_call = MagicMock()
@@ -210,6 +217,9 @@ async def test_approval_required(orchestrator, mock_llm, mock_safety, mock_capab
     safety_result.require_approval = True
     safety_result.reason = "Critical operation requires human approval"
     mock_safety.evaluate.return_value = safety_result
+
+    # Mock create_approval_task to return a task ID
+    mock_safety.create_approval_task = AsyncMock(return_value="task-123")
 
     # Final LLM response
     final_response = MagicMock()
@@ -231,14 +241,16 @@ async def test_approval_required(orchestrator, mock_llm, mock_safety, mock_capab
 @pytest.mark.asyncio
 async def test_conversation_reset(orchestrator):
     """Test conversation history reset."""
+    from twinops.agent.llm.base import Message
+
     # Add some history
-    orchestrator._conversation_history.append({"role": "user", "content": "test"})
-    assert len(orchestrator._conversation_history) == 1
+    orchestrator._conversation.append(Message(role="user", content="test"))
+    assert len(orchestrator._conversation) == 1
 
     # Reset
     orchestrator.reset_conversation()
 
-    assert len(orchestrator._conversation_history) == 0
+    assert len(orchestrator._conversation) == 0
 
 
 @pytest.mark.asyncio
@@ -268,4 +280,4 @@ async def test_invalid_tool_name(orchestrator, mock_llm, mock_capabilities):
 
     assert len(response.tool_results) == 1
     assert response.tool_results[0].success is False
-    assert "not found" in response.tool_results[0].error.lower()
+    assert "unknown tool" in response.tool_results[0].error.lower()

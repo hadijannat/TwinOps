@@ -81,14 +81,21 @@ async def test_initialize_sets_up_mqtt_subscriptions(shadow_manager, mock_mqtt_c
 
 @pytest.mark.asyncio
 async def test_get_state_returns_copy(shadow_manager):
-    """Test that get_state returns a copy of the state."""
+    """Test that get_aas and get_all_submodels return copies of the state."""
     await shadow_manager.initialize()
 
-    state1 = shadow_manager.get_state()
-    state2 = shadow_manager.get_state()
+    # Test that separate calls return different objects (copies)
+    aas1 = await shadow_manager.get_aas()
+    aas2 = await shadow_manager.get_aas()
+    submodels1 = await shadow_manager.get_all_submodels()
+    submodels2 = await shadow_manager.get_all_submodels()
 
-    assert state1 is not state2
-    assert state1 == state2
+    # Different object references
+    assert aas1 is not aas2
+    assert submodels1 is not submodels2
+    # But equal content
+    assert aas1 == aas2
+    assert submodels1 == submodels2
 
 
 @pytest.mark.asyncio
@@ -124,24 +131,29 @@ async def test_get_operations_extracts_operations(shadow_manager):
 @pytest.mark.asyncio
 async def test_event_count_increments(shadow_manager):
     """Test that event count increments with each event."""
+    from twinops.common.basyx_topics import b64url_encode_nopad
+
     await shadow_manager.initialize()
 
     initial_count = shadow_manager.event_count
 
-    # Simulate property update event
-    event_data = {
-        "submodelId": "urn:test:submodel:control",
-        "path": "CurrentSpeed",
-        "value": 1500.0,
+    # Submodel ID must be base64 encoded in topic
+    submodel_id = "urn:test:submodel:control"
+    sm_encoded = b64url_encode_nopad(submodel_id)
+
+    # Simulate submodel update event using correct BaSyx topic format
+    submodel_data = {
+        "id": submodel_id,
+        "submodelElements": [{"idShort": "CurrentSpeed", "value": 1500.0}],
     }
     message = MqttMessage(
-        topic="aas-events/test-repo/submodels/update",
-        payload=json.dumps(event_data).encode(),
+        topic=f"submodel-repository/test-repo/submodels/{sm_encoded}/updated",
+        payload=json.dumps(submodel_data).encode(),
         qos=0,
         retain=False,
     )
 
-    await shadow_manager._handle_mqtt_event(message)
+    await shadow_manager._handle_mqtt_message(message)
 
     assert shadow_manager.event_count == initial_count + 1
 
@@ -149,12 +161,17 @@ async def test_event_count_increments(shadow_manager):
 @pytest.mark.asyncio
 async def test_property_update_event(shadow_manager):
     """Test that property update events modify state."""
+    from twinops.common.basyx_topics import b64url_encode_nopad
+
+    submodel_id = "urn:test:submodel:control"
+    sm_encoded = b64url_encode_nopad(submodel_id)
+
     # Setup initial state
     shadow_manager._state = {
         "aas": {},
         "submodels": {
-            "urn:test:submodel:control": {
-                "id": "urn:test:submodel:control",
+            submodel_id: {
+                "id": submodel_id,
                 "submodelElements": [
                     {
                         "modelType": "Property",
@@ -166,24 +183,24 @@ async def test_property_update_event(shadow_manager):
         },
     }
 
-    # Create property update event
-    event_data = {
-        "submodelId": "urn:test:submodel:control",
-        "path": "CurrentSpeed",
+    # Create element update event - the payload contains the new element data
+    new_element_data = {
+        "modelType": "Property",
+        "idShort": "CurrentSpeed",
         "value": 1500.0,
     }
     message = MqttMessage(
-        topic="sm-repo/test-repo/submodels/urn%3Atest%3Asubmodel%3Acontrol/submodelElements/CurrentSpeed/update",
-        payload=json.dumps(event_data).encode(),
+        topic=f"submodel-repository/test-repo/submodels/{sm_encoded}/submodelElements/CurrentSpeed/updated",
+        payload=json.dumps(new_element_data).encode(),
         qos=0,
         retain=False,
     )
 
     # Process event
-    await shadow_manager._handle_mqtt_event(message)
+    await shadow_manager._handle_mqtt_message(message)
 
     # Verify state updated
-    submodel = shadow_manager._state["submodels"]["urn:test:submodel:control"]
+    submodel = shadow_manager._state["submodels"][submodel_id]
     prop = submodel["submodelElements"][0]
     assert prop["value"] == 1500.0
 
@@ -206,7 +223,7 @@ async def test_get_property_value(shadow_manager):
         },
     }
 
-    value = shadow_manager.get_property_value("urn:test:sm", "TestProp")
+    value = await shadow_manager.get_property_value("urn:test:sm", "TestProp")
     assert value == 42
 
 
@@ -215,20 +232,20 @@ async def test_get_property_value_not_found(shadow_manager):
     """Test getting non-existent property returns None."""
     shadow_manager._state = {"aas": {}, "submodels": {}}
 
-    value = shadow_manager.get_property_value("nonexistent", "Prop")
+    value = await shadow_manager.get_property_value("nonexistent", "Prop")
     assert value is None
 
 
 @pytest.mark.asyncio
 async def test_resync_on_error(shadow_manager, mock_twin_client):
-    """Test that resync is triggered on patch failure."""
+    """Test that refresh triggers a full resync."""
     await shadow_manager.initialize()
 
     # Reset the mock to track resync calls
     mock_twin_client.get_full_twin.reset_mock()
 
-    # Trigger resync
-    await shadow_manager._resync()
+    # Trigger resync via public refresh() method
+    await shadow_manager.refresh()
 
     mock_twin_client.get_full_twin.assert_called_once()
 

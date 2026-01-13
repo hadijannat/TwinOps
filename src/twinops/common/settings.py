@@ -78,6 +78,22 @@ class Settings(BaseSettings):
         default=4096,
         description="Maximum tokens for LLM response",
     )
+    llm_request_timeout: float = Field(
+        default=30.0,
+        description="Timeout for LLM API requests in seconds",
+    )
+    llm_circuit_failure_threshold: int = Field(
+        default=3,
+        description="Number of consecutive failures before circuit breaker opens",
+    )
+    llm_circuit_recovery_timeout: float = Field(
+        default=60.0,
+        description="Seconds to wait before testing if LLM service recovered",
+    )
+    llm_fallback_enabled: bool = Field(
+        default=True,
+        description="Enable fallback to rules-based client when LLM circuit opens",
+    )
 
     # Agent
     agent_port: int = Field(
@@ -110,6 +126,14 @@ class Settings(BaseSettings):
         default=True,
         description="Whether to require policy signature verification",
     )
+    policy_submodel_id: str = Field(
+        default="urn:example:submodel:policy",
+        description="ID of the PolicyTwin submodel containing safety policies",
+    )
+    interlock_fail_safe: bool = Field(
+        default=True,
+        description="If True, deny operations when interlock property is missing (fail-safe). If False, allow with warning (fail-open).",
+    )
 
     # Sandbox/OpService
     sandbox_port: int = Field(
@@ -137,6 +161,20 @@ class Settings(BaseSettings):
     approval_timeout: float = Field(
         default=3600.0,
         description="Maximum time to wait for human approval",
+    )
+
+    # Startup validation
+    startup_timeout: float = Field(
+        default=120.0,
+        description="Maximum time to wait for dependencies during startup",
+    )
+    startup_retry_interval: float = Field(
+        default=5.0,
+        description="Interval between dependency check retries during startup",
+    )
+    startup_validate_aas: bool = Field(
+        default=True,
+        description="Validate that the configured AAS exists during startup",
     )
 
 

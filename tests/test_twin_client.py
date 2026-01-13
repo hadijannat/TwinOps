@@ -155,19 +155,24 @@ class TestTwinClientCircuitBreaker:
         client = TwinClient(settings, circuit_breaker=cb)
 
         async with client:
-            # Mock failed requests
-            with patch.object(
-                client, "_protected_request", new_callable=AsyncMock
-            ) as mock_request:
-                # Simulate 500 errors
-                mock_response = AsyncMock()
-                mock_response.status = 500
-                mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-                mock_response.__aexit__ = AsyncMock(return_value=None)
-                mock_response.text = AsyncMock(return_value="Server Error")
+            # Get the session and mock its request method
+            session = client._ensure_session()
+
+            # Create mock response for 500 errors
+            mock_response = AsyncMock()
+            mock_response.status = 500
+            mock_response.text = AsyncMock(return_value="Server Error")
+
+            with patch.object(session, "request", new_callable=AsyncMock) as mock_request:
                 mock_request.return_value = mock_response
 
-                # These should record failures
+                # First failure - circuit should record it
+                with contextlib.suppress(TwinClientError):
+                    await client.get_all_aas()
+                assert cb.state == CircuitState.CLOSED  # Still closed after 1 failure
+                assert cb._failure_count == 1
+
+                # Second failure should open circuit
                 with contextlib.suppress(TwinClientError):
                     await client.get_all_aas()
 
