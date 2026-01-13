@@ -24,6 +24,7 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+          cache: pip
 
       - name: Install dependencies
         run: |
@@ -36,17 +37,20 @@ jobs:
           python - <<'PY'
           import pathlib
           import subprocess
+          import re
 
           lines = subprocess.check_output(["python", "-m", "pip", "freeze"], text=True).splitlines()
           filtered = []
           for line in lines:
-              if line.startswith("-e "):
+              stripped = line.strip()
+              if not stripped:
                   continue
-              if line.startswith("twinops==") or line.startswith("twinops @"):
+              if stripped.startswith("-e ") or stripped.startswith("--editable"):
                   continue
-              if line.startswith("twinops==="):
+              name = re.split(r"[<=>@\\[]", stripped, 1)[0].strip().lower()
+              if name == "twinops":
                   continue
-              filtered.append(line)
+              filtered.append(stripped)
           pathlib.Path("requirements.txt").write_text("\n".join(filtered) + "\n")
           PY
           pip-audit -r requirements.txt --strict --desc on
@@ -66,6 +70,7 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+          cache: pip
 
       - name: Install Bandit
         run: pip install bandit[toml]
@@ -76,8 +81,9 @@ jobs:
           python - <<'PY'
           import json
           import os
+          from pathlib import Path
 
-          path = "bandit-results.sarif"
+          path = Path("bandit-results.sarif")
 
           def write_minimal():
               data = {
@@ -97,16 +103,15 @@ jobs:
                       }
                   ],
               }
-              with open(path, "w", encoding="utf-8") as handle:
-                  json.dump(data, handle)
+              path.write_text(json.dumps(data), encoding="utf-8")
 
-          if not os.path.exists(path):
+          if not path.exists():
               write_minimal()
           else:
               try:
-                  with open(path, encoding="utf-8") as handle:
-                      data = json.load(handle)
-                  if not data.get("runs"):
+                  data = json.loads(path.read_text(encoding="utf-8"))
+                  runs = data.get("runs")
+                  if not isinstance(runs, list) or len(runs) == 0:
                       write_minimal()
               except Exception:
                   write_minimal()
