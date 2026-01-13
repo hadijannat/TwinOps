@@ -1386,6 +1386,13 @@ class AgentServer:
                             }
                         },
                         "required": ["error"],
+                        "example": {
+                            "error": {
+                                "code": "missing_field",
+                                "message": "Missing 'message' field",
+                                "details": {"field": "message"},
+                            }
+                        },
                     },
                     "Task": {
                         "type": "object",
@@ -1412,6 +1419,16 @@ class AgentServer:
                             "status_reason": {"type": "string"},
                         },
                         "required": ["task_id", "status"],
+                        "example": {
+                            "task_id": "task-1234abcd",
+                            "tool": "StartPump",
+                            "risk": "high",
+                            "status": "pending_approval",
+                            "created_at": 1715614800.0,
+                            "requested_by_roles": ["operator"],
+                            "args": {"PumpId": "pump-001"},
+                            "safety_reasoning": "Requires manual approval for high-risk action.",
+                        },
                     },
                     "ToolResult": {
                         "type": "object",
@@ -1426,6 +1443,13 @@ class AgentServer:
                             "job_id": {"type": "string"},
                         },
                         "required": ["tool", "success", "status"],
+                        "example": {
+                            "tool": "StartPump",
+                            "success": True,
+                            "status": "simulated_only",
+                            "simulated": True,
+                            "result": {"state": "Running"},
+                        },
                     },
                 },
                 "securitySchemes": {

@@ -239,8 +239,6 @@ jobs:
 
       - name: Run cleanup test
         run: pytest tests/test_opservice_cleanup.py -q
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
   integration-test:
     name: Integration Tests
