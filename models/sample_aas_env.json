@@ -1,0 +1,469 @@
+{
+  "assetAdministrationShells": [
+    {
+      "modelType": "AssetAdministrationShell",
+      "id": "urn:example:aas:pump-001",
+      "idShort": "Pump001",
+      "description": [
+        {
+          "language": "en",
+          "text": "Industrial centrifugal pump for fluid transfer"
+        }
+      ],
+      "assetInformation": {
+        "assetKind": "Instance",
+        "globalAssetId": "urn:example:asset:pump-001"
+      },
+      "submodels": [
+        {
+          "type": "ModelReference",
+          "keys": [
+            {
+              "type": "Submodel",
+              "value": "urn:example:submodel:operational"
+            }
+          ]
+        },
+        {
+          "type": "ModelReference",
+          "keys": [
+            {
+              "type": "Submodel",
+              "value": "urn:example:submodel:control"
+            }
+          ]
+        },
+        {
+          "type": "ModelReference",
+          "keys": [
+            {
+              "type": "Submodel",
+              "value": "urn:example:submodel:policy"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "submodels": [
+    {
+      "modelType": "Submodel",
+      "id": "urn:example:submodel:operational",
+      "idShort": "OperationalData",
+      "description": [
+        {
+          "language": "en",
+          "text": "Real-time operational data from the pump"
+        }
+      ],
+      "submodelElements": [
+        {
+          "modelType": "Property",
+          "idShort": "CurrentSpeed",
+          "valueType": "xs:double",
+          "value": 0.0,
+          "description": [
+            {
+              "language": "en",
+              "text": "Current pump rotational speed"
+            }
+          ],
+          "qualifiers": [
+            {
+              "type": "unit",
+              "valueType": "xs:string",
+              "value": "rpm"
+            }
+          ]
+        },
+        {
+          "modelType": "Property",
+          "idShort": "CurrentTemperature",
+          "valueType": "xs:double",
+          "value": 25.0,
+          "description": [
+            {
+              "language": "en",
+              "text": "Current pump bearing temperature"
+            }
+          ],
+          "qualifiers": [
+            {
+              "type": "unit",
+              "valueType": "xs:string",
+              "value": "°C"
+            }
+          ]
+        },
+        {
+          "modelType": "Property",
+          "idShort": "CurrentPressure",
+          "valueType": "xs:double",
+          "value": 1.0,
+          "description": [
+            {
+              "language": "en",
+              "text": "Current discharge pressure"
+            }
+          ],
+          "qualifiers": [
+            {
+              "type": "unit",
+              "valueType": "xs:string",
+              "value": "bar"
+            }
+          ]
+        },
+        {
+          "modelType": "Property",
+          "idShort": "FlowRate",
+          "valueType": "xs:double",
+          "value": 0.0,
+          "description": [
+            {
+              "language": "en",
+              "text": "Current flow rate"
+            }
+          ],
+          "qualifiers": [
+            {
+              "type": "unit",
+              "valueType": "xs:string",
+              "value": "m³/h"
+            }
+          ]
+        },
+        {
+          "modelType": "SubmodelElementCollection",
+          "idShort": "DischargeValve",
+          "description": [
+            {
+              "language": "en",
+              "text": "Discharge valve status"
+            }
+          ],
+          "value": [
+            {
+              "modelType": "Property",
+              "idShort": "Position",
+              "valueType": "xs:string",
+              "value": "OPEN"
+            },
+            {
+              "modelType": "Property",
+              "idShort": "PercentOpen",
+              "valueType": "xs:double",
+              "value": 100.0
+            }
+          ]
+        },
+        {
+          "modelType": "Property",
+          "idShort": "State",
+          "valueType": "xs:string",
+          "value": "Stopped",
+          "description": [
+            {
+              "language": "en",
+              "text": "Current pump state"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "modelType": "Submodel",
+      "id": "urn:example:submodel:control",
+      "idShort": "Control",
+      "description": [
+        {
+          "language": "en",
+          "text": "Control operations and job management"
+        }
+      ],
+      "submodelElements": [
+        {
+          "modelType": "Operation",
+          "idShort": "StartPump",
+          "description": [
+            {
+              "language": "en",
+              "text": "Start the pump motor"
+            }
+          ],
+          "qualifiers": [
+            {
+              "type": "RiskLevel",
+              "valueType": "xs:string",
+              "value": "HIGH"
+            },
+            {
+              "type": "invocationDelegation",
+              "valueType": "xs:string",
+              "value": "http://opservice:8087/operations/StartPump"
+            }
+          ],
+          "inputVariables": [],
+          "outputVariables": [
+            {
+              "value": {
+                "modelType": "Property",
+                "idShort": "State",
+                "valueType": "xs:string"
+              }
+            }
+          ]
+        },
+        {
+          "modelType": "Operation",
+          "idShort": "StopPump",
+          "description": [
+            {
+              "language": "en",
+              "text": "Stop the pump motor"
+            }
+          ],
+          "qualifiers": [
+            {
+              "type": "RiskLevel",
+              "valueType": "xs:string",
+              "value": "HIGH"
+            },
+            {
+              "type": "invocationDelegation",
+              "valueType": "xs:string",
+              "value": "http://opservice:8087/operations/StopPump"
+            }
+          ],
+          "inputVariables": [],
+          "outputVariables": [
+            {
+              "value": {
+                "modelType": "Property",
+                "idShort": "State",
+                "valueType": "xs:string"
+              }
+            }
+          ]
+        },
+        {
+          "modelType": "Operation",
+          "idShort": "SetSpeed",
+          "description": [
+            {
+              "language": "en",
+              "text": "Set the pump rotational speed"
+            }
+          ],
+          "qualifiers": [
+            {
+              "type": "RiskLevel",
+              "valueType": "xs:string",
+              "value": "HIGH"
+            },
+            {
+              "type": "invocationDelegation",
+              "valueType": "xs:string",
+              "value": "http://opservice:8087/operations/SetSpeed"
+            }
+          ],
+          "inputVariables": [
+            {
+              "value": {
+                "modelType": "Property",
+                "idShort": "RPM",
+                "valueType": "xs:double",
+                "description": [
+                  {
+                    "language": "en",
+                    "text": "Target rotational speed"
+                  }
+                ],
+                "qualifiers": [
+                  {
+                    "type": "Min",
+                    "valueType": "xs:double",
+                    "value": "0"
+                  },
+                  {
+                    "type": "Max",
+                    "valueType": "xs:double",
+                    "value": "3600"
+                  },
+                  {
+                    "type": "unit",
+                    "valueType": "xs:string",
+                    "value": "rpm"
+                  }
+                ]
+              }
+            }
+          ],
+          "outputVariables": [
+            {
+              "value": {
+                "modelType": "Property",
+                "idShort": "ActualSpeed",
+                "valueType": "xs:double"
+              }
+            }
+          ]
+        },
+        {
+          "modelType": "Operation",
+          "idShort": "GetStatus",
+          "description": [
+            {
+              "language": "en",
+              "text": "Get current pump status"
+            }
+          ],
+          "qualifiers": [
+            {
+              "type": "RiskLevel",
+              "valueType": "xs:string",
+              "value": "LOW"
+            },
+            {
+              "type": "invocationDelegation",
+              "valueType": "xs:string",
+              "value": "http://opservice:8087/operations/GetStatus"
+            }
+          ],
+          "inputVariables": [],
+          "outputVariables": [
+            {
+              "value": {
+                "modelType": "Property",
+                "idShort": "Status",
+                "valueType": "xs:string"
+              }
+            }
+          ]
+        },
+        {
+          "modelType": "Operation",
+          "idShort": "EmergencyStop",
+          "description": [
+            {
+              "language": "en",
+              "text": "Emergency stop - immediately halts all operations"
+            }
+          ],
+          "qualifiers": [
+            {
+              "type": "RiskLevel",
+              "valueType": "xs:string",
+              "value": "CRITICAL"
+            },
+            {
+              "type": "invocationDelegation",
+              "valueType": "xs:string",
+              "value": "http://opservice:8087/operations/EmergencyStop"
+            }
+          ],
+          "inputVariables": [],
+          "outputVariables": []
+        },
+        {
+          "modelType": "Property",
+          "idShort": "TasksJson",
+          "valueType": "xs:string",
+          "value": "{\"tasks\": []}",
+          "description": [
+            {
+              "language": "en",
+              "text": "JSON array of pending approval tasks"
+            }
+          ]
+        },
+        {
+          "modelType": "Property",
+          "idShort": "JobStatusJson",
+          "valueType": "xs:string",
+          "value": "{\"jobs\": []}",
+          "description": [
+            {
+              "language": "en",
+              "text": "JSON array of active job statuses"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "modelType": "Submodel",
+      "id": "urn:example:submodel:policy",
+      "idShort": "PolicyTwin",
+      "description": [
+        {
+          "language": "en",
+          "text": "CovenantTwin - Safety policy and governance"
+        }
+      ],
+      "submodelElements": [
+        {
+          "modelType": "Property",
+          "idShort": "PolicyJson",
+          "valueType": "xs:string",
+          "value": "{\"require_simulation_for_risk\": \"HIGH\", \"require_approval_for_risk\": \"CRITICAL\", \"role_bindings\": {\"operator\": {\"allow\": [\"StartPump\", \"StopPump\", \"SetSpeed\", \"GetStatus\"]}, \"viewer\": {\"allow\": [\"GetStatus\"]}, \"maintenance\": {\"allow\": [\"*\"]}}, \"interlocks\": [{\"id\": \"temp-high\", \"deny_when\": {\"submodel\": \"urn:example:submodel:operational\", \"path\": \"CurrentTemperature\", \"op\": \">\", \"value\": 95}, \"message\": \"Temperature too high to execute commands.\"}, {\"id\": \"discharge-closed\", \"deny_when\": {\"submodel\": \"urn:example:submodel:operational\", \"path\": \"DischargeValve/Position\", \"op\": \"==\", \"value\": \"CLOSED\"}, \"message\": \"Cannot start pump: discharge valve is closed\"}], \"task_submodel_id\": \"urn:example:submodel:control\", \"tasks_property_path\": \"TasksJson\", \"job_status_submodel_id\": \"urn:example:submodel:control\", \"job_status_property_path\": \"JobStatusJson\"}",
+          "description": [
+            {
+              "language": "en",
+              "text": "Machine-readable safety policy rules"
+            }
+          ]
+        },
+        {
+          "modelType": "Property",
+          "idShort": "PolicyPublicKeyPem",
+          "valueType": "xs:string",
+          "value": "",
+          "description": [
+            {
+              "language": "en",
+              "text": "Ed25519 public key for signature verification"
+            }
+          ]
+        },
+        {
+          "modelType": "Property",
+          "idShort": "PolicySignature",
+          "valueType": "xs:string",
+          "value": "",
+          "description": [
+            {
+              "language": "en",
+              "text": "Base64 signature over PolicyJson"
+            }
+          ]
+        },
+        {
+          "modelType": "Property",
+          "idShort": "PolicyVersion",
+          "valueType": "xs:string",
+          "value": "1.0.0",
+          "description": [
+            {
+              "language": "en",
+              "text": "Policy version identifier"
+            }
+          ]
+        },
+        {
+          "modelType": "Property",
+          "idShort": "LastUpdated",
+          "valueType": "xs:dateTime",
+          "value": "2026-01-13T00:00:00Z",
+          "description": [
+            {
+              "language": "en",
+              "text": "Last policy update timestamp"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "conceptDescriptions": []
+}

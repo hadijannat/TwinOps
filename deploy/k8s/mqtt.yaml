@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mqtt
+  namespace: twinops
+  labels:
+    app.kubernetes.io/name: twinops
+    app.kubernetes.io/component: mqtt
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: mqtt
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: twinops
+        app.kubernetes.io/component: mqtt
+    spec:
+      containers:
+        - name: mosquitto
+          image: eclipse-mosquitto:2
+          ports:
+            - containerPort: 1883
+              name: mqtt
+          volumeMounts:
+            - name: config
+              mountPath: /mosquitto/config/mosquitto.conf
+              subPath: mosquitto.conf
+            - name: data
+              mountPath: /mosquitto/data
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "200m"
+          livenessProbe:
+            tcpSocket:
+              port: mqtt
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            tcpSocket:
+              port: mqtt
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: config
+          configMap:
+            name: mosquitto-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mqtt
+  namespace: twinops
+  labels:
+    app.kubernetes.io/name: twinops
+    app.kubernetes.io/component: mqtt
+spec:
+  selector:
+    app.kubernetes.io/component: mqtt
+  ports:
+    - port: 1883
+      targetPort: mqtt
+      name: mqtt

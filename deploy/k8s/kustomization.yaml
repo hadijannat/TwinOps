@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: twinops
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - secrets.yaml
+  - mqtt.yaml
+  - sandbox.yaml
+  - opservice.yaml
+  - agent.yaml
+
+commonLabels:
+  app.kubernetes.io/managed-by: kustomize
+  app.kubernetes.io/version: "1.0.0"
+
+images:
+  - name: twinops/agent
+    newTag: latest
+  - name: twinops/sandbox
+    newTag: latest
+  - name: twinops/opservice
+    newTag: latest

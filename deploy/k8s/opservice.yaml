@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opservice
+  namespace: twinops
+  labels:
+    app.kubernetes.io/name: twinops
+    app.kubernetes.io/component: opservice
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: opservice
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: twinops
+        app.kubernetes.io/component: opservice
+    spec:
+      containers:
+        - name: opservice
+          image: twinops/opservice:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8087
+              name: http
+          envFrom:
+            - configMapRef:
+                name: twinops-config
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opservice
+  namespace: twinops
+  labels:
+    app.kubernetes.io/name: twinops
+    app.kubernetes.io/component: opservice
+spec:
+  selector:
+    app.kubernetes.io/component: opservice
+  ports:
+    - port: 8087
+      targetPort: http
+      name: http

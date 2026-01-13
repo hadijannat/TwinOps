@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: twinops
+  labels:
+    app.kubernetes.io/name: twinops
+    app.kubernetes.io/component: infrastructure

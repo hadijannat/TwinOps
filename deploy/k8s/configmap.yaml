@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: twinops-config
+  namespace: twinops
+  labels:
+    app.kubernetes.io/name: twinops
+data:
+  # Twin connection
+  TWINOPS_TWIN_BASE_URL: "http://twin-sandbox:8081"
+  TWINOPS_REPO_ID: "default"
+  TWINOPS_AAS_ID: "urn:example:aas:pump-001"
+
+  # MQTT
+  TWINOPS_MQTT_BROKER_HOST: "mqtt"
+  TWINOPS_MQTT_BROKER_PORT: "1883"
+
+  # LLM (default to rules-based for testing)
+  TWINOPS_LLM_PROVIDER: "rules"
+  TWINOPS_LLM_MODEL: "claude-sonnet-4-20250514"
+
+  # Ports
+  TWINOPS_AGENT_PORT: "8080"
+  TWINOPS_SANDBOX_PORT: "8081"
+  TWINOPS_OPSERVICE_PORT: "8087"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mosquitto-config
+  namespace: twinops
+data:
+  mosquitto.conf: |
+    listener 1883
+    protocol mqtt
+    allow_anonymous true
+    persistence true
+    persistence_location /mosquitto/data/
+    log_dest stdout

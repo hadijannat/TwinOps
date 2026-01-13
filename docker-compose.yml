@@ -1,0 +1,91 @@
+# TwinOps Docker Compose - Local Development
+# This configuration runs all services locally for development and testing
+
+version: "3.8"
+
+services:
+  # MQTT Broker
+  mqtt:
+    image: eclipse-mosquitto:2
+    container_name: twinops-mqtt
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-data:/mosquitto/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -t '$$SYS/#' -C 1 -i healthcheck -W 3"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Sandbox AAS Server (mock BaSyx)
+  twin-sandbox:
+    build:
+      context: .
+      dockerfile: docker/sandbox/Dockerfile
+    container_name: twinops-sandbox
+    ports:
+      - "8081:8081"
+    environment:
+      - TWINOPS_MQTT_BROKER_HOST=mqtt
+      - TWINOPS_MQTT_BROKER_PORT=1883
+      - TWINOPS_SANDBOX_PORT=8081
+      - TWINOPS_REPO_ID=default
+    depends_on:
+      mqtt:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Operation Delegation Service
+  opservice:
+    build:
+      context: .
+      dockerfile: docker/opservice/Dockerfile
+    container_name: twinops-opservice
+    ports:
+      - "8087:8087"
+    environment:
+      - TWINOPS_TWIN_BASE_URL=http://twin-sandbox:8081
+      - TWINOPS_MQTT_BROKER_HOST=mqtt
+      - TWINOPS_MQTT_BROKER_PORT=1883
+      - TWINOPS_OPSERVICE_PORT=8087
+    depends_on:
+      - twin-sandbox
+    restart: unless-stopped
+
+  # AI Agent
+  agent:
+    build:
+      context: .
+      dockerfile: docker/agent/Dockerfile
+    container_name: twinops-agent
+    ports:
+      - "8080:8080"
+    environment:
+      - TWINOPS_TWIN_BASE_URL=http://twin-sandbox:8081
+      - TWINOPS_MQTT_BROKER_HOST=mqtt
+      - TWINOPS_MQTT_BROKER_PORT=1883
+      - TWINOPS_REPO_ID=default
+      - TWINOPS_AAS_ID=urn:example:aas:pump-001
+      - TWINOPS_AGENT_PORT=8080
+      - TWINOPS_LLM_PROVIDER=rules
+      # Uncomment and set for LLM providers:
+      # - TWINOPS_LLM_PROVIDER=anthropic
+      # - TWINOPS_ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # - TWINOPS_LLM_MODEL=claude-sonnet-4-20250514
+    volumes:
+      - agent-audit:/app/audit_logs
+    depends_on:
+      - twin-sandbox
+      - opservice
+    restart: unless-stopped
+
+volumes:
+  mosquitto-data:
+  agent-audit:
+
+networks:
+  default:
+    name: twinops-network
