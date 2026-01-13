@@ -106,13 +106,35 @@ def build_all_subscriptions(repo_id: str) -> list[TopicSubscription]:
     """
     Build all MQTT subscription topics for a repository.
 
+    Note: Use build_subscriptions_split() for separate AAS and Submodel repo IDs.
+
     Args:
-        repo_id: Repository identifier
+        repo_id: Repository identifier (used for both AAS and Submodel repos)
 
     Returns:
         List of all topic subscriptions
     """
     return build_aas_subscriptions(repo_id) + build_submodel_subscriptions(repo_id)
+
+
+def build_subscriptions_split(
+    aas_repo_id: str,
+    submodel_repo_id: str,
+) -> list[TopicSubscription]:
+    """
+    Build MQTT subscription topics with separate repo IDs for AAS and Submodel repositories.
+
+    Real BaSyx deployments often have separate repository IDs for AAS and Submodel
+    repositories. This function allows subscribing to events from both.
+
+    Args:
+        aas_repo_id: Repository ID for AAS repository events
+        submodel_repo_id: Repository ID for Submodel repository events
+
+    Returns:
+        List of all topic subscriptions for both repositories
+    """
+    return build_aas_subscriptions(aas_repo_id) + build_submodel_subscriptions(submodel_repo_id)
 
 
 def parse_topic(topic: str) -> ParsedTopic | None:

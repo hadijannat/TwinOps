@@ -323,6 +323,8 @@ class SafetyKernel:
         tool_risk: str,
         roles: tuple[str, ...],
         params: dict[str, Any],
+        action_id: str | None = None,
+        shadow_freshness: float | None = None,
     ) -> SafetyDecision:
         """
         Evaluate whether a tool call should be allowed.
@@ -338,19 +340,23 @@ class SafetyKernel:
             tool_risk: Risk level of the operation
             roles: User's roles
             params: Tool parameters
+            action_id: Idempotency key for duplicate detection
+            shadow_freshness: Age of shadow twin state in seconds
 
         Returns:
             SafetyDecision with allow/deny and conditions
         """
         config = await self.load_policy()
 
-        # Log intent
+        # Log intent with action context
         self._audit.log(
             event="intent",
             tool=tool_name,
             risk=tool_risk,
             roles=roles,
             params=params,
+            action_id=action_id,
+            shadow_freshness=shadow_freshness,
         )
 
         # Layer 1: RBAC
@@ -517,6 +523,7 @@ class SafetyKernel:
         roles: tuple[str, ...],
         params: dict[str, Any],
         simulation_result: dict[str, Any] | None = None,
+        action_id: str | None = None,
     ) -> str:
         """
         Create a human-in-the-loop approval task.
@@ -527,6 +534,7 @@ class SafetyKernel:
             roles: Requesting roles
             params: Tool parameters
             simulation_result: Result from simulation run
+            action_id: Idempotency key for duplicate detection
 
         Returns:
             Task ID
@@ -548,6 +556,10 @@ class SafetyKernel:
         if simulation_result:
             task["simulate_result"] = simulation_result
 
+        # Include action_id for idempotency tracking
+        if action_id:
+            task["action_id"] = action_id
+
         await self._twin_client.add_task(
             config.task_submodel_id,
             config.tasks_property_path,
@@ -559,6 +571,7 @@ class SafetyKernel:
             tool=tool_name,
             task_id=task_id,
             roles=roles,
+            action_id=action_id,
         )
 
         logger.info("Approval task created", task_id=task_id, tool=tool_name)
@@ -792,6 +805,7 @@ class SafetyKernel:
         roles: tuple[str, ...],
         result: dict[str, Any],
         simulated: bool = False,
+        action_id: str | None = None,
     ) -> None:
         """Log a successful execution."""
         self._audit.log(
@@ -800,6 +814,7 @@ class SafetyKernel:
             risk=risk,
             roles=roles,
             result=result,
+            action_id=action_id,
         )
 
     def log_error(
@@ -807,6 +822,7 @@ class SafetyKernel:
         tool_name: str,
         roles: tuple[str, ...],
         error: str,
+        action_id: str | None = None,
     ) -> None:
         """Log an execution error."""
         self._audit.log(
@@ -814,4 +830,5 @@ class SafetyKernel:
             tool=tool_name,
             roles=roles,
             error=error,
+            action_id=action_id,
         )

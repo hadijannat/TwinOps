@@ -28,7 +28,15 @@ class Settings(BaseSettings):
     )
     repo_id: str = Field(
         default="default",
-        description="Repository ID for MQTT topic scoping",
+        description="Repository ID for MQTT topic scoping (legacy, prefer aas_repo_id/submodel_repo_id)",
+    )
+    aas_repo_id: str | None = Field(
+        default=None,
+        description="Repository ID for AAS repository MQTT topics (defaults to repo_id if not set)",
+    )
+    submodel_repo_id: str | None = Field(
+        default=None,
+        description="Repository ID for Submodel repository MQTT topics (defaults to repo_id if not set)",
     )
     aas_id: str = Field(
         default="urn:example:aas:pump-001",
@@ -158,6 +166,10 @@ class Settings(BaseSettings):
         default=300.0,
         description="Maximum time to wait for job completion",
     )
+    job_http_fallback_polls: int = Field(
+        default=5,
+        description="Number of shadow polls without update before falling back to HTTP",
+    )
     approval_timeout: float = Field(
         default=3600.0,
         description="Maximum time to wait for human approval",
@@ -176,6 +188,16 @@ class Settings(BaseSettings):
         default=True,
         description="Validate that the configured AAS exists during startup",
     )
+
+    @property
+    def effective_aas_repo_id(self) -> str:
+        """Get the effective AAS repository ID (aas_repo_id or fallback to repo_id)."""
+        return self.aas_repo_id if self.aas_repo_id is not None else self.repo_id
+
+    @property
+    def effective_submodel_repo_id(self) -> str:
+        """Get the effective Submodel repository ID (submodel_repo_id or fallback to repo_id)."""
+        return self.submodel_repo_id if self.submodel_repo_id is not None else self.repo_id
 
 
 @lru_cache

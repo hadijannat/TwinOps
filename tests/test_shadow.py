@@ -55,7 +55,7 @@ def shadow_manager(mock_twin_client, mock_mqtt_client):
         twin_client=mock_twin_client,
         mqtt_client=mock_mqtt_client,
         aas_id="urn:test:aas:001",
-        repo_id="test-repo",
+        aas_repo_id="test-repo",
     )
 
 

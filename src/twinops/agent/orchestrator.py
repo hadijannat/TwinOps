@@ -3,6 +3,7 @@
 import asyncio
 import json
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -29,6 +30,7 @@ class ToolResult:
     simulated: bool = False
     job_id: str | None = None
     status: str = "completed"
+    action_id: str | None = None  # Idempotency key for duplicate detection
 
 
 @dataclass
@@ -165,6 +167,10 @@ Be concise and focus on the task at hand."""
         roles: tuple[str, ...],
     ) -> ToolResult:
         """Execute a single tool with safety checks."""
+        # Generate idempotency key for this action
+        action_id = str(uuid.uuid4())
+        logger.debug("Starting tool execution", tool=tool_name, action_id=action_id)
+
         # Find tool spec
         tool = self._capabilities.get_tool_by_name(tool_name)
         if not tool:
@@ -172,14 +178,20 @@ Be concise and focus on the task at hand."""
                 tool_name=tool_name,
                 success=False,
                 error=f"Unknown tool: {tool_name}",
+                action_id=action_id,
             )
 
-        # Safety evaluation
+        # Get shadow freshness for safety context
+        shadow_freshness = self._shadow.freshness_seconds
+
+        # Safety evaluation with action context
         decision = await self._safety.evaluate(
             tool_name=tool_name,
             tool_risk=tool.risk_level,
             roles=roles,
             params=params,
+            action_id=action_id,
+            shadow_freshness=shadow_freshness,
         )
 
         if not decision.allowed:
@@ -188,6 +200,7 @@ Be concise and focus on the task at hand."""
                 success=False,
                 error=decision.reason,
                 status="denied",
+                action_id=action_id,
             )
 
         # Force simulation if required
@@ -197,17 +210,18 @@ Be concise and focus on the task at hand."""
 
         # Execute (possibly in simulation)
         try:
-            result = await self._invoke_operation(tool, params)
+            result = await self._invoke_operation(tool, params, action_id)
         except Exception as e:
-            self._safety.log_error(tool_name, roles, str(e))
+            self._safety.log_error(tool_name, roles, str(e), action_id)
             return ToolResult(
                 tool_name=tool_name,
                 success=False,
                 error=str(e),
+                action_id=action_id,
             )
 
         simulated = params.get("simulate", False)
-        self._safety.log_execution(tool_name, tool.risk_level, roles, result, simulated)
+        self._safety.log_execution(tool_name, tool.risk_level, roles, result, simulated, action_id)
 
         # Check if approval is required (after simulation)
         if decision.require_approval and not simulated:
@@ -217,6 +231,7 @@ Be concise and focus on the task at hand."""
                 roles=roles,
                 params=params,
                 simulation_result=result if simulated else None,
+                action_id=action_id,
             )
             return ToolResult(
                 tool_name=tool_name,
@@ -225,6 +240,7 @@ Be concise and focus on the task at hand."""
                 job_id=task_id,
                 status="pending_approval",
                 simulated=simulated,
+                action_id=action_id,
             )
 
         # For simulation, indicate it was simulation-only
@@ -235,32 +251,47 @@ Be concise and focus on the task at hand."""
                 result=result,
                 simulated=True,
                 status="simulated_only",
+                action_id=action_id,
             )
 
         # Check for async job
         job_id = result.get("jobId") or result.get("job_id")
         if job_id:
-            # Monitor job completion
-            final_result = await self._monitor_job(job_id)
+            # Monitor job completion with HTTP fallback support
+            final_result = await self._monitor_job(
+                job_id=job_id,
+                submodel_id=tool.submodel_id,
+                operation_path=tool.operation_path,
+            )
             return ToolResult(
                 tool_name=tool_name,
                 success=final_result.get("status") == "COMPLETED",
                 result=final_result,
                 job_id=job_id,
+                action_id=action_id,
             )
 
         return ToolResult(
             tool_name=tool_name,
             success=True,
             result=result,
+            action_id=action_id,
         )
 
     async def _invoke_operation(
         self,
         tool: ToolSpec,
         params: dict[str, Any],
+        action_id: str | None = None,
     ) -> dict[str, Any]:
-        """Invoke an AAS operation."""
+        """
+        Invoke an AAS operation.
+
+        Args:
+            tool: Tool specification
+            params: Tool parameters
+            action_id: Idempotency key for duplicate detection
+        """
         # Filter out safety fields
         input_args = []
         for key, value in params.items():
@@ -289,10 +320,30 @@ Be concise and focus on the task at hand."""
             async_mode=True,
         )
 
-    async def _monitor_job(self, job_id: str) -> dict[str, Any]:
-        """Monitor an async job until completion."""
+    async def _monitor_job(
+        self,
+        job_id: str,
+        submodel_id: str | None = None,
+        operation_path: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Monitor an async job until completion.
+
+        Uses shadow twin for status updates with HTTP fallback when shadow
+        appears stale (no updates after configured number of polls).
+
+        Args:
+            job_id: Job identifier
+            submodel_id: Submodel ID for HTTP fallback (optional)
+            operation_path: Operation path for HTTP fallback (optional)
+
+        Returns:
+            Job status dictionary
+        """
         policy = await self._safety.load_policy()
         start_time = time.time()
+        polls_without_update = 0
+        last_shadow_version: str | None = None
 
         while time.time() - start_time < self._settings.job_timeout:
             # Get job status from shadow twin
@@ -305,12 +356,57 @@ Be concise and focus on the task at hand."""
                 if isinstance(job_status, str):
                     job_status = json.loads(job_status)
 
+                # Track if shadow is updating
+                current_version = json.dumps(job_status, sort_keys=True)
+                if current_version == last_shadow_version:
+                    polls_without_update += 1
+                else:
+                    polls_without_update = 0
+                    last_shadow_version = current_version
+
                 jobs = job_status.get("jobs", [])
                 for job in jobs:
                     if job.get("job_id") == job_id:
                         status = job.get("status", "")
                         if status in ("COMPLETED", "FAILED", "CANCELLED"):
                             return job
+            else:
+                polls_without_update += 1
+
+            # HTTP fallback: if shadow is stale and we have the context for HTTP polling
+            if (
+                polls_without_update >= self._settings.job_http_fallback_polls
+                and submodel_id is not None
+                and operation_path is not None
+            ):
+                logger.info(
+                    "Shadow twin stale, falling back to HTTP job polling",
+                    job_id=job_id,
+                    polls_without_update=polls_without_update,
+                )
+                try:
+                    http_status = await self._twin.get_job_status(
+                        submodel_id=submodel_id,
+                        operation_path=operation_path,
+                        job_id=job_id,
+                    )
+                    # Check if complete
+                    job_state = http_status.get("status") or http_status.get("executionState")
+                    if job_state in ("COMPLETED", "FINISHED", "FAILED", "CANCELLED"):
+                        return {
+                            "job_id": job_id,
+                            "status": job_state,
+                            "result": http_status.get("outputArguments", http_status.get("result")),
+                            "source": "http_fallback",
+                        }
+                except Exception as e:
+                    logger.warning(
+                        "HTTP job polling failed",
+                        job_id=job_id,
+                        error=str(e),
+                    )
+                # Reset counter to avoid hammering HTTP endpoint
+                polls_without_update = 0
 
             await asyncio.sleep(self._settings.job_poll_interval)
 

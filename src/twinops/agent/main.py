@@ -275,12 +275,13 @@ class AgentServer:
             password=self._settings.mqtt_password,
         )
 
-        # Create shadow twin
+        # Create shadow twin with separate repo IDs for AAS and Submodel repositories
         self._shadow = ShadowTwinManager(
             twin_client=self._twin_client,
             mqtt_client=self._mqtt_client,
             aas_id=self._settings.aas_id,
-            repo_id=self._settings.repo_id,
+            aas_repo_id=self._settings.effective_aas_repo_id,
+            submodel_repo_id=self._settings.effective_submodel_repo_id,
         )
 
         # Initialize shadow (connects MQTT)
@@ -402,11 +403,20 @@ class AgentServer:
         Returns healthy if the process is running.
         Used by Kubernetes liveness probes.
         """
-        return JSONResponse({
+        response_data = {
             "status": "healthy",
             "uptime": round(time.time() - self._start_time, 1),
             "shutting_down": self._shutdown.is_shutting_down,
-        })
+        }
+
+        # Include shadow twin freshness if initialized
+        if self._shadow and self._shadow.is_initialized:
+            response_data["shadow_freshness_seconds"] = round(
+                self._shadow.freshness_seconds, 1
+            )
+            response_data["shadow_event_count"] = self._shadow.event_count
+
+        return JSONResponse(response_data)
 
     async def handle_ready(self, _request: Request) -> JSONResponse:
         """

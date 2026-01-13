@@ -72,6 +72,7 @@ class MqttMessage:
 
 
 MessageHandler = Callable[[MqttMessage], Coroutine[Any, Any, None]]
+ReconnectHandler = Callable[[], Coroutine[Any, Any, None]]
 
 
 class MqttClient:
@@ -110,6 +111,7 @@ class MqttClient:
         )
         self._subscriptions: list[TopicSubscription] = []
         self._handlers: list[MessageHandler] = []
+        self._reconnect_handlers: list[ReconnectHandler] = []
         self._running = False
         self._connected = False
         self._last_connected_time: float | None = None
@@ -136,6 +138,15 @@ class MqttClient:
     def add_handler(self, handler: MessageHandler) -> None:
         """Add a message handler."""
         self._handlers.append(handler)
+
+    def add_reconnect_handler(self, handler: ReconnectHandler) -> None:
+        """
+        Add a handler to be called on reconnection.
+
+        This is useful for triggering resync operations when the MQTT connection
+        is restored after being offline.
+        """
+        self._reconnect_handlers.append(handler)
 
     def set_subscriptions(self, subscriptions: list[TopicSubscription]) -> None:
         """Set topics to subscribe to."""
@@ -221,6 +232,21 @@ class MqttClient:
                 subscription_count=len(self._subscriptions),
                 connection_number=self._connection_count,
             )
+
+            # Call reconnect handlers on reconnection (not initial connection)
+            if self._connection_count > 1:
+                logger.info(
+                    "Triggering reconnect handlers",
+                    handler_count=len(self._reconnect_handlers),
+                )
+                for reconnect_handler in self._reconnect_handlers:
+                    try:
+                        await reconnect_handler()
+                    except Exception as e:
+                        logger.error(
+                            "Reconnect handler error",
+                            error=str(e),
+                        )
 
             # Process incoming messages
             async for msg in client.messages:

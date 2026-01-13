@@ -486,6 +486,50 @@ class TwinClient:
                 raise TwinClientError(f"Delegated operation failed: {text}", response.status)
             return await response.json()
 
+    async def get_job_status(
+        self,
+        submodel_id: str,
+        operation_path: str,
+        job_id: str,
+    ) -> dict[str, Any]:
+        """
+        Get job status directly via HTTP.
+
+        This provides a fallback for checking job status when MQTT-based
+        shadow twin updates are unavailable or stale.
+
+        Args:
+            submodel_id: Submodel identifier
+            operation_path: Path to the operation
+            job_id: Job identifier from async invocation
+
+        Returns:
+            Job status including state and result (if complete)
+        """
+        sm_id_encoded = b64url_encode_nopad(submodel_id)
+        url = f"{self._sm_base}/submodels/{sm_id_encoded}/submodel-elements/{operation_path}/$result"
+
+        logger.debug(
+            "Fetching job status via HTTP",
+            submodel_id=submodel_id,
+            operation_path=operation_path,
+            job_id=job_id,
+        )
+
+        response = await self._protected_request(
+            "GET",
+            url,
+            params={"jobId": job_id},
+        )
+        async with response:
+            if response.status == 404:
+                # Job not found or expired
+                raise TwinClientError(f"Job not found: {job_id}", response.status)
+            if response.status not in (200, 202):
+                text = await response.text()
+                raise TwinClientError(f"Failed to get job status: {text}", response.status)
+            return await response.json()
+
     # === Batch Operations ===
 
     async def get_full_twin(self, aas_id: str) -> dict[str, Any]:

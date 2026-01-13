@@ -2,13 +2,14 @@
 
 import asyncio
 import json
+import time
 from typing import Any
 
 from twinops.common.basyx_topics import (
     EventType,
     ParsedTopic,
     RepositoryType,
-    build_all_subscriptions,
+    build_subscriptions_split,
     parse_topic,
 )
 from twinops.common.logging import get_logger
@@ -34,7 +35,8 @@ class ShadowTwinManager:
         twin_client: TwinClient,
         mqtt_client: MqttClient,
         aas_id: str,
-        repo_id: str,
+        aas_repo_id: str,
+        submodel_repo_id: str | None = None,
     ):
         """
         Initialize the Shadow Twin Manager.
@@ -43,12 +45,15 @@ class ShadowTwinManager:
             twin_client: HTTP client for AAS operations
             mqtt_client: MQTT client for event subscription
             aas_id: AAS identifier to track
-            repo_id: Repository ID for MQTT topics
+            aas_repo_id: Repository ID for AAS repository MQTT topics
+            submodel_repo_id: Repository ID for Submodel repository MQTT topics
+                             (defaults to aas_repo_id if not specified)
         """
         self._twin_client = twin_client
         self._mqtt_client = mqtt_client
         self._aas_id = aas_id
-        self._repo_id = repo_id
+        self._aas_repo_id = aas_repo_id
+        self._submodel_repo_id = submodel_repo_id if submodel_repo_id is not None else aas_repo_id
 
         self._lock = asyncio.Lock()
         self._state: dict[str, Any] = {
@@ -57,6 +62,8 @@ class ShadowTwinManager:
         }
         self._initialized = False
         self._event_count = 0
+        self._last_sync_time: float | None = None
+        self._last_update_times: dict[str, float] = {}  # Per-submodel timestamps
 
     @property
     def is_initialized(self) -> bool:
@@ -68,18 +75,60 @@ class ShadowTwinManager:
         """Number of MQTT events processed."""
         return self._event_count
 
+    @property
+    def last_sync_time(self) -> float | None:
+        """Timestamp of last full sync."""
+        return self._last_sync_time
+
+    @property
+    def freshness_seconds(self) -> float:
+        """
+        Seconds since last sync or update.
+
+        Returns float('inf') if never synced.
+        """
+        if self._last_sync_time is None:
+            return float("inf")
+        return time.time() - self._last_sync_time
+
+    def get_submodel_freshness(self, submodel_id: str) -> float:
+        """
+        Get freshness for a specific submodel in seconds.
+
+        Args:
+            submodel_id: Submodel identifier
+
+        Returns:
+            Seconds since last update, or inf if never updated
+        """
+        last_update = self._last_update_times.get(submodel_id)
+        if last_update is None:
+            return float("inf")
+        return time.time() - last_update
+
     async def initialize(self) -> None:
         """
         Perform initial HTTP sync and start MQTT subscription.
 
         This must be called before using the shadow twin.
         """
-        logger.info("Initializing Shadow Twin", aas_id=self._aas_id)
+        logger.info(
+            "Initializing Shadow Twin",
+            aas_id=self._aas_id,
+            aas_repo_id=self._aas_repo_id,
+            submodel_repo_id=self._submodel_repo_id,
+        )
 
-        # Set up MQTT subscriptions
-        subscriptions = build_all_subscriptions(self._repo_id)
+        # Set up MQTT subscriptions for both repositories
+        subscriptions = build_subscriptions_split(
+            aas_repo_id=self._aas_repo_id,
+            submodel_repo_id=self._submodel_repo_id,
+        )
         self._mqtt_client.set_subscriptions(subscriptions)
         self._mqtt_client.add_handler(self._handle_mqtt_message)
+
+        # Register reconnect handler for automatic resync after connection loss
+        self._mqtt_client.add_reconnect_handler(self._on_mqtt_reconnect)
 
         # Perform initial HTTP snapshot
         await self._full_sync()
@@ -97,6 +146,11 @@ class ShadowTwinManager:
             try:
                 full_state = await self._twin_client.get_full_twin(self._aas_id)
                 self._state = full_state
+                sync_time = time.time()
+                self._last_sync_time = sync_time
+                # Update timestamps for all submodels
+                for sm_id in self._state["submodels"]:
+                    self._last_update_times[sm_id] = sync_time
                 logger.debug(
                     "Full sync completed",
                     submodel_count=len(self._state["submodels"]),
@@ -105,14 +159,39 @@ class ShadowTwinManager:
                 logger.error("Full sync failed", error=str(e))
                 raise
 
+    async def _on_mqtt_reconnect(self) -> None:
+        """
+        Handle MQTT reconnection by triggering full resync.
+
+        Called when MQTT connection is re-established after being lost.
+        Events may have been missed during the disconnection period.
+        """
+        logger.info(
+            "MQTT reconnected, triggering shadow twin resync",
+            aas_id=self._aas_id,
+        )
+        await self._full_sync()
+        logger.info(
+            "Shadow twin resync completed",
+            submodel_count=len(self._state["submodels"]),
+            freshness_seconds=self.freshness_seconds,
+        )
+
     async def _handle_mqtt_message(self, message: MqttMessage) -> None:
         """Process incoming MQTT event."""
         parsed = parse_topic(message.topic)
         if not parsed:
             return
 
-        # Only process events for our repository
-        if parsed.repo_id != self._repo_id:
+        # Only process events for our repositories (AAS or Submodel)
+        # Check the appropriate repo_id based on the repository type
+        if parsed.repository_type == RepositoryType.AAS:
+            if parsed.repo_id != self._aas_repo_id:
+                return
+        elif parsed.repository_type == RepositoryType.SUBMODEL:
+            if parsed.repo_id != self._submodel_repo_id:
+                return
+        else:
             return
 
         self._event_count += 1
@@ -179,6 +258,7 @@ class ShadowTwinManager:
 
         if parsed.event_type == EventType.DELETED:
             del self._state["submodels"][submodel_id]
+            self._last_update_times.pop(submodel_id, None)
             logger.debug("Submodel deleted via MQTT", submodel_id=submodel_id)
             return
 
@@ -192,6 +272,10 @@ class ShadowTwinManager:
                 else:
                     # Full submodel update
                     self._state["submodels"][submodel_id] = data
+
+                # Update timestamp for this submodel
+                self._last_update_times[submodel_id] = time.time()
+                self._last_sync_time = time.time()
 
                 logger.debug(
                     "Submodel updated via MQTT",
