@@ -33,7 +33,22 @@ jobs:
       - name: Run pip-audit
         run: |
           pip install -e .
-          python -m pip freeze | grep -v '^twinops==' > requirements.txt
+          python - <<'PY'
+          import pathlib
+          import subprocess
+
+          lines = subprocess.check_output(["python", "-m", "pip", "freeze"], text=True).splitlines()
+          filtered = []
+          for line in lines:
+              if line.startswith("-e "):
+                  continue
+              if line.startswith("twinops==") or line.startswith("twinops @"):
+                  continue
+              if line.startswith("twinops==="):
+                  continue
+              filtered.append(line)
+          pathlib.Path("requirements.txt").write_text("\n".join(filtered) + "\n")
+          PY
           pip-audit -r requirements.txt --strict --desc on
 
       - name: Run safety check
