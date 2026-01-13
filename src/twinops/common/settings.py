@@ -92,6 +92,10 @@ class Settings(BaseSettings):
         default=12,
         description="Number of top tools to retrieve per query",
     )
+    rate_limit_rpm: float = Field(
+        default=60.0,
+        description="Rate limit in requests per minute",
+    )
 
     # Safety
     default_roles: tuple[str, ...] = Field(

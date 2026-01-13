@@ -1,6 +1,8 @@
 """HTTP client for AAS repository operations."""
 
 import json
+import time
+from enum import Enum
 from typing import Any
 
 import aiohttp
@@ -10,6 +12,120 @@ from twinops.common.logging import get_logger
 from twinops.common.settings import Settings
 
 logger = get_logger(__name__)
+
+
+class CircuitState(Enum):
+    """Circuit breaker states."""
+
+    CLOSED = "closed"  # Normal operation
+    OPEN = "open"  # Failing, reject requests
+    HALF_OPEN = "half_open"  # Testing if recovered
+
+
+class CircuitBreakerOpen(Exception):
+    """Exception raised when circuit breaker is open."""
+
+    def __init__(self, message: str = "Circuit breaker is open"):
+        super().__init__(message)
+
+
+class CircuitBreaker:
+    """Circuit breaker pattern implementation for resilience."""
+
+    def __init__(
+        self,
+        failure_threshold: int = 5,
+        recovery_timeout: float = 30.0,
+        half_open_max_calls: int = 3,
+    ):
+        """
+        Initialize circuit breaker.
+
+        Args:
+            failure_threshold: Number of failures before opening circuit
+            recovery_timeout: Seconds to wait before trying half-open
+            half_open_max_calls: Successful calls needed to close circuit
+        """
+        self._failure_threshold = failure_threshold
+        self._recovery_timeout = recovery_timeout
+        self._half_open_max_calls = half_open_max_calls
+
+        self._state = CircuitState.CLOSED
+        self._failure_count = 0
+        self._success_count = 0
+        self._last_failure_time: float = 0
+        self._half_open_calls = 0
+
+    @property
+    def state(self) -> CircuitState:
+        """Get current circuit state, transitioning if needed."""
+        if (
+            self._state == CircuitState.OPEN
+            and time.time() - self._last_failure_time > self._recovery_timeout
+        ):
+            logger.info("Circuit breaker transitioning to half-open")
+            self._state = CircuitState.HALF_OPEN
+            self._half_open_calls = 0
+        return self._state
+
+    @property
+    def stats(self) -> dict[str, Any]:
+        """Get circuit breaker statistics."""
+        return {
+            "state": self.state.value,
+            "failure_count": self._failure_count,
+            "success_count": self._success_count,
+            "last_failure_time": self._last_failure_time,
+        }
+
+    def record_success(self) -> None:
+        """Record a successful operation."""
+        self._success_count += 1
+        if self._state == CircuitState.HALF_OPEN:
+            self._half_open_calls += 1
+            if self._half_open_calls >= self._half_open_max_calls:
+                logger.info(
+                    "Circuit breaker closing after successful recovery",
+                    successful_calls=self._half_open_calls,
+                )
+                self._state = CircuitState.CLOSED
+                self._failure_count = 0
+        elif self._state == CircuitState.CLOSED:
+            # Reset failure count on success in closed state
+            self._failure_count = 0
+
+    def record_failure(self) -> None:
+        """Record a failed operation."""
+        self._failure_count += 1
+        self._last_failure_time = time.time()
+
+        if self._state == CircuitState.HALF_OPEN:
+            logger.warning("Circuit breaker reopening after failure in half-open state")
+            self._state = CircuitState.OPEN
+        elif self._failure_count >= self._failure_threshold:
+            logger.warning(
+                "Circuit breaker opening",
+                failure_count=self._failure_count,
+                threshold=self._failure_threshold,
+            )
+            self._state = CircuitState.OPEN
+
+    def can_execute(self) -> bool:
+        """Check if an operation can be executed."""
+        state = self.state
+        if state == CircuitState.CLOSED:
+            return True
+        if state == CircuitState.HALF_OPEN:
+            return self._half_open_calls < self._half_open_max_calls
+        return False  # OPEN
+
+    def ensure_can_execute(self) -> None:
+        """Raise exception if circuit is open."""
+        if not self.can_execute():
+            raise CircuitBreakerOpen(
+                f"Circuit breaker is {self.state.value}, "
+                f"retry after {self._recovery_timeout}s"
+            )
 
 
 class TwinClientError(Exception):
@@ -25,20 +141,31 @@ class TwinClient:
     HTTP client for BaSyx AAS/Submodel repository operations.
 
     Supports both combined (single server) and split (separate AAS/SM servers)
-    repository configurations.
+    repository configurations. Includes circuit breaker for resilience.
     """
 
-    def __init__(self, settings: Settings):
+    def __init__(
+        self,
+        settings: Settings,
+        circuit_breaker: CircuitBreaker | None = None,
+    ):
         """
         Initialize the twin client.
 
         Args:
             settings: Application settings
+            circuit_breaker: Optional circuit breaker instance
         """
         self._aas_base = settings.twin_base_url.rstrip("/")
         self._sm_base = (settings.submodel_base_url or settings.twin_base_url).rstrip("/")
         self._timeout = aiohttp.ClientTimeout(total=settings.http_timeout)
         self._session: aiohttp.ClientSession | None = None
+        self._circuit_breaker = circuit_breaker or CircuitBreaker()
+
+    @property
+    def circuit_breaker(self) -> CircuitBreaker:
+        """Get the circuit breaker instance."""
+        return self._circuit_breaker
 
     async def __aenter__(self) -> "TwinClient":
         """Enter async context."""
@@ -57,6 +184,42 @@ class TwinClient:
             self._session = aiohttp.ClientSession(timeout=self._timeout)
         return self._session
 
+    async def _protected_request(
+        self,
+        method: str,
+        url: str,
+        **kwargs: Any,
+    ) -> aiohttp.ClientResponse:
+        """
+        Execute HTTP request with circuit breaker protection.
+
+        Args:
+            method: HTTP method (GET, POST, PUT, etc.)
+            url: Request URL
+            **kwargs: Additional arguments for the request
+
+        Returns:
+            aiohttp response object
+
+        Raises:
+            CircuitBreakerOpen: If circuit breaker is open
+            TwinClientError: On request failure
+        """
+        self._circuit_breaker.ensure_can_execute()
+        session = self._ensure_session()
+
+        try:
+            response = await session.request(method, url, **kwargs)
+            # Record success for 2xx and 4xx (client errors are not server failures)
+            if response.status < 500:
+                self._circuit_breaker.record_success()
+            else:
+                self._circuit_breaker.record_failure()
+            return response
+        except aiohttp.ClientError as e:
+            self._circuit_breaker.record_failure()
+            raise TwinClientError(f"Request failed: {e}") from e
+
     # === AAS Operations ===
 
     async def get_aas(self, aas_id: str) -> dict[str, Any]:
@@ -69,13 +232,13 @@ class TwinClient:
         Returns:
             AAS JSON structure
         """
-        session = self._ensure_session()
         aas_id_encoded = b64url_encode_nopad(aas_id)
         url = f"{self._aas_base}/shells/{aas_id_encoded}"
 
         logger.debug("Fetching AAS", aas_id=aas_id, url=url)
 
-        async with session.get(url) as response:
+        response = await self._protected_request("GET", url)
+        async with response:
             if response.status == 404:
                 raise TwinClientError(f"AAS not found: {aas_id}", 404)
             if response.status != 200:
@@ -90,10 +253,10 @@ class TwinClient:
         Returns:
             List of AAS JSON structures
         """
-        session = self._ensure_session()
         url = f"{self._aas_base}/shells"
 
-        async with session.get(url) as response:
+        response = await self._protected_request("GET", url)
+        async with response:
             if response.status != 200:
                 text = await response.text()
                 raise TwinClientError(f"Failed to list AAS: {text}", response.status)
@@ -111,11 +274,11 @@ class TwinClient:
         Returns:
             List of submodel reference structures
         """
-        session = self._ensure_session()
         aas_id_encoded = b64url_encode_nopad(aas_id)
         url = f"{self._aas_base}/shells/{aas_id_encoded}/submodel-refs"
 
-        async with session.get(url) as response:
+        response = await self._protected_request("GET", url)
+        async with response:
             if response.status != 200:
                 text = await response.text()
                 raise TwinClientError(f"Failed to get submodel refs: {text}", response.status)
@@ -134,13 +297,13 @@ class TwinClient:
         Returns:
             Submodel JSON structure
         """
-        session = self._ensure_session()
         sm_id_encoded = b64url_encode_nopad(submodel_id)
         url = f"{self._sm_base}/submodels/{sm_id_encoded}"
 
         logger.debug("Fetching submodel", submodel_id=submodel_id, url=url)
 
-        async with session.get(url) as response:
+        response = await self._protected_request("GET", url)
+        async with response:
             if response.status == 404:
                 raise TwinClientError(f"Submodel not found: {submodel_id}", 404)
             if response.status != 200:
@@ -163,11 +326,11 @@ class TwinClient:
         Returns:
             SubmodelElement JSON structure
         """
-        session = self._ensure_session()
         sm_id_encoded = b64url_encode_nopad(submodel_id)
         url = f"{self._sm_base}/submodels/{sm_id_encoded}/submodel-elements/{id_short_path}"
 
-        async with session.get(url) as response:
+        response = await self._protected_request("GET", url)
+        async with response:
             if response.status == 404:
                 raise TwinClientError(f"Element not found: {id_short_path}", 404)
             if response.status != 200:
@@ -190,11 +353,11 @@ class TwinClient:
         Returns:
             Property value
         """
-        session = self._ensure_session()
         sm_id_encoded = b64url_encode_nopad(submodel_id)
         url = f"{self._sm_base}/submodels/{sm_id_encoded}/submodel-elements/{id_short_path}/$value"
 
-        async with session.get(url) as response:
+        response = await self._protected_request("GET", url)
+        async with response:
             if response.status != 200:
                 text = await response.text()
                 raise TwinClientError(f"Failed to get value: {text}", response.status)
@@ -214,15 +377,16 @@ class TwinClient:
             id_short_path: Path to property
             value: New value
         """
-        session = self._ensure_session()
         sm_id_encoded = b64url_encode_nopad(submodel_id)
         url = f"{self._sm_base}/submodels/{sm_id_encoded}/submodel-elements/{id_short_path}/$value"
 
-        async with session.put(
+        response = await self._protected_request(
+            "PUT",
             url,
             json=value,
             headers={"Content-Type": "application/json"},
-        ) as response:
+        )
+        async with response:
             if response.status not in (200, 204):
                 text = await response.text()
                 raise TwinClientError(f"Failed to set value: {text}", response.status)
@@ -250,13 +414,12 @@ class TwinClient:
         Returns:
             Operation result or job reference
         """
-        session = self._ensure_session()
         sm_id_encoded = b64url_encode_nopad(submodel_id)
 
         endpoint = "$invoke-async" if async_mode else "$invoke"
         url = f"{self._sm_base}/submodels/{sm_id_encoded}/submodel-elements/{operation_path}/{endpoint}"
 
-        payload = {
+        payload: dict[str, Any] = {
             "inputArguments": input_arguments,
         }
         if client_context:
@@ -269,11 +432,13 @@ class TwinClient:
             async_mode=async_mode,
         )
 
-        async with session.post(
+        response = await self._protected_request(
+            "POST",
             url,
             json=payload,
             headers={"Content-Type": "application/json"},
-        ) as response:
+        )
+        async with response:
             if response.status not in (200, 202):
                 text = await response.text()
                 raise TwinClientError(f"Operation failed: {text}", response.status)
@@ -296,8 +461,6 @@ class TwinClient:
         Returns:
             Operation result
         """
-        session = self._ensure_session()
-
         payload = {
             "inputArguments": input_arguments,
             "clientContext": {
@@ -311,11 +474,13 @@ class TwinClient:
             simulate=simulate,
         )
 
-        async with session.post(
+        response = await self._protected_request(
+            "POST",
             delegation_url,
             json=payload,
             headers={"Content-Type": "application/json"},
-        ) as response:
+        )
+        async with response:
             if response.status not in (200, 202):
                 text = await response.text()
                 raise TwinClientError(f"Delegated operation failed: {text}", response.status)
@@ -372,10 +537,7 @@ class TwinClient:
         """
         try:
             value = await self.get_property_value(submodel_id, property_path)
-            if isinstance(value, str):
-                data = json.loads(value)
-            else:
-                data = value
+            data = json.loads(value) if isinstance(value, str) else value
             return data.get("tasks", [])
         except TwinClientError:
             return []

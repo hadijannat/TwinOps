@@ -1,10 +1,12 @@
 """MQTT client wrapper for async operation."""
 
 import asyncio
-from collections.abc import Callable, Coroutine
+import contextlib
+import time
+from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Self
 
 import aiomqtt
 
@@ -12,6 +14,39 @@ from twinops.common.basyx_topics import TopicSubscription
 from twinops.common.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+class ExponentialBackoff:
+    """Exponential backoff calculator with jitter."""
+
+    def __init__(
+        self,
+        base_delay: float = 5.0,
+        max_delay: float = 60.0,
+        multiplier: float = 2.0,
+    ):
+        self._base_delay = base_delay
+        self._max_delay = max_delay
+        self._multiplier = multiplier
+        self._attempt = 0
+
+    def reset(self) -> None:
+        """Reset backoff to initial state."""
+        self._attempt = 0
+
+    def next_delay(self) -> float:
+        """Calculate next delay with exponential backoff."""
+        delay = min(
+            self._base_delay * (self._multiplier ** self._attempt),
+            self._max_delay,
+        )
+        self._attempt += 1
+        return delay
+
+    @property
+    def attempt_count(self) -> int:
+        """Current attempt count."""
+        return self._attempt
 
 
 @dataclass
@@ -40,7 +75,7 @@ MessageHandler = Callable[[MqttMessage], Coroutine[Any, Any, None]]
 
 
 class MqttClient:
-    """Async MQTT client with automatic reconnection."""
+    """Async MQTT client with automatic reconnection and exponential backoff."""
 
     def __init__(
         self,
@@ -49,7 +84,8 @@ class MqttClient:
         client_id: str = "twinops",
         username: str | None = None,
         password: str | None = None,
-        reconnect_interval: float = 5.0,
+        base_reconnect_delay: float = 5.0,
+        max_reconnect_delay: float = 60.0,
     ):
         """
         Initialize MQTT client.
@@ -60,18 +96,42 @@ class MqttClient:
             client_id: Client identifier
             username: Optional username
             password: Optional password
-            reconnect_interval: Seconds between reconnection attempts
+            base_reconnect_delay: Initial delay between reconnection attempts
+            max_reconnect_delay: Maximum delay between reconnection attempts
         """
         self._host = host
         self._port = port
         self._client_id = client_id
         self._username = username
         self._password = password
-        self._reconnect_interval = reconnect_interval
+        self._backoff = ExponentialBackoff(
+            base_delay=base_reconnect_delay,
+            max_delay=max_reconnect_delay,
+        )
         self._subscriptions: list[TopicSubscription] = []
         self._handlers: list[MessageHandler] = []
         self._running = False
+        self._connected = False
+        self._last_connected_time: float | None = None
+        self._connection_count = 0
+        self._disconnection_count = 0
         self._task: asyncio.Task[None] | None = None
+
+    @property
+    def is_connected(self) -> bool:
+        """Check if currently connected to MQTT broker."""
+        return self._connected
+
+    @property
+    def connection_stats(self) -> dict[str, Any]:
+        """Get connection statistics."""
+        return {
+            "connected": self._connected,
+            "connection_count": self._connection_count,
+            "disconnection_count": self._disconnection_count,
+            "last_connected": self._last_connected_time,
+            "reconnect_attempts": self._backoff.attempt_count,
+        }
 
     def add_handler(self, handler: MessageHandler) -> None:
         """Add a message handler."""
@@ -82,7 +142,7 @@ class MqttClient:
         self._subscriptions = list(subscriptions)
 
     @asynccontextmanager
-    async def connect(self):
+    async def connect(self) -> AsyncIterator[Self]:
         """Context manager for connection lifecycle."""
         self._running = True
         self._task = asyncio.create_task(self._run_loop())
@@ -92,32 +152,42 @@ class MqttClient:
             self._running = False
             if self._task:
                 self._task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await self._task
-                except asyncio.CancelledError:
-                    pass
 
     async def _run_loop(self) -> None:
-        """Main connection loop with auto-reconnect."""
+        """Main connection loop with auto-reconnect and exponential backoff."""
         while self._running:
             try:
                 await self._connect_and_listen()
             except aiomqtt.MqttError as e:
+                self._connected = False
+                self._disconnection_count += 1
                 if not self._running:
                     break
+                delay = self._backoff.next_delay()
                 logger.warning(
-                    "MQTT connection lost, reconnecting...",
+                    "MQTT connection lost, reconnecting with backoff...",
                     error=str(e),
-                    interval=self._reconnect_interval,
+                    delay=delay,
+                    attempt=self._backoff.attempt_count,
                 )
-                await asyncio.sleep(self._reconnect_interval)
+                await asyncio.sleep(delay)
             except asyncio.CancelledError:
+                self._connected = False
                 break
             except Exception as e:
+                self._connected = False
+                self._disconnection_count += 1
                 if not self._running:
                     break
-                logger.error("Unexpected MQTT error", error=str(e))
-                await asyncio.sleep(self._reconnect_interval)
+                delay = self._backoff.next_delay()
+                logger.error(
+                    "Unexpected MQTT error, reconnecting...",
+                    error=str(e),
+                    delay=delay,
+                )
+                await asyncio.sleep(delay)
 
     async def _connect_and_listen(self) -> None:
         """Establish connection and process messages."""
@@ -135,6 +205,12 @@ class MqttClient:
             username=self._username,
             password=self._password,
         ) as client:
+            # Mark as connected and reset backoff
+            self._connected = True
+            self._connection_count += 1
+            self._last_connected_time = time.time()
+            self._backoff.reset()
+
             # Subscribe to all topics
             for sub in self._subscriptions:
                 await client.subscribe(sub.topic, qos=sub.qos)
@@ -143,6 +219,7 @@ class MqttClient:
             logger.info(
                 "MQTT connected and subscribed",
                 subscription_count=len(self._subscriptions),
+                connection_number=self._connection_count,
             )
 
             # Process incoming messages

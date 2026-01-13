@@ -1,0 +1,195 @@
+# NetworkPolicies for TwinOps namespace
+# Restricts traffic to only allowed paths
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-network-policy
+  namespace: twinops
+  labels:
+    app.kubernetes.io/name: twinops
+    app.kubernetes.io/component: agent
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: agent
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from ingress controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Allow traffic from within namespace (for health checks)
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # Allow traffic to MQTT broker
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: mqtt
+      ports:
+        - protocol: TCP
+          port: 1883
+    # Allow traffic to twin-sandbox
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: sandbox
+      ports:
+        - protocol: TCP
+          port: 8081
+    # Allow traffic to opservice
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: opservice
+      ports:
+        - protocol: TCP
+          port: 8087
+    # Allow DNS resolution
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-network-policy
+  namespace: twinops
+  labels:
+    app.kubernetes.io/name: twinops
+    app.kubernetes.io/component: sandbox
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: sandbox
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from agent
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: agent
+      ports:
+        - protocol: TCP
+          port: 8081
+    # Allow traffic from opservice
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: opservice
+      ports:
+        - protocol: TCP
+          port: 8081
+  egress:
+    # Allow DNS resolution
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: opservice-network-policy
+  namespace: twinops
+  labels:
+    app.kubernetes.io/name: twinops
+    app.kubernetes.io/component: opservice
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: opservice
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from agent
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: agent
+      ports:
+        - protocol: TCP
+          port: 8087
+  egress:
+    # Allow traffic to twin-sandbox
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: sandbox
+      ports:
+        - protocol: TCP
+          port: 8081
+    # Allow DNS resolution
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mqtt-network-policy
+  namespace: twinops
+  labels:
+    app.kubernetes.io/name: twinops
+    app.kubernetes.io/component: mqtt
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: mqtt
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from agent (subscriber)
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: agent
+      ports:
+        - protocol: TCP
+          port: 1883
+    # Allow traffic from sandbox (publisher)
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: sandbox
+      ports:
+        - protocol: TCP
+          port: 1883
+  egress:
+    # MQTT broker typically doesn't need outbound
+    - {}

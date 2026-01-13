@@ -11,6 +11,7 @@ resources:
   - sandbox.yaml
   - opservice.yaml
   - agent.yaml
+  - networkpolicy.yaml
 
 commonLabels:
   app.kubernetes.io/managed-by: kustomize

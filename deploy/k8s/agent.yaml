@@ -47,10 +47,11 @@ spec:
             periodSeconds: 30
           readinessProbe:
             httpGet:
-              path: /health
+              path: /ready
               port: http
             initialDelaySeconds: 10
             periodSeconds: 10
+            failureThreshold: 3
       volumes:
         - name: audit-logs
           persistentVolumeClaim:
@@ -86,6 +87,20 @@ spec:
   resources:
     requests:
       storage: 1Gi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: agent-pdb
+  namespace: twinops
+  labels:
+    app.kubernetes.io/name: twinops
+    app.kubernetes.io/component: agent
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: agent
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
