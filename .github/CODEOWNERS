@@ -1,0 +1,19 @@
+# Code Owners for TwinOps
+# These owners will be requested for review when PRs modify matching files
+
+# Default owners for everything
+* @maintainers
+
+# Core agent components
+/src/twinops/agent/ @maintainers
+/src/twinops/agent/safety.py @security-team @maintainers
+/src/twinops/agent/policy_signing.py @security-team @maintainers
+
+# Infrastructure
+/deploy/ @platform-team @maintainers
+/docker/ @platform-team @maintainers
+/.github/ @platform-team @maintainers
+
+# Documentation
+*.md @docs-team @maintainers
+/docs/ @docs-team @maintainers

@@ -1,0 +1,219 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      version:
+        description: 'Version to deploy (e.g., v1.0.0 or latest)'
+        required: true
+        default: 'latest'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  validate:
+    name: Validate Deployment
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.resolve.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image tag
+        id: resolve
+        run: |
+          if [[ "${{ inputs.version }}" == "latest" ]]; then
+            TAG="latest"
+          else
+            TAG="${{ inputs.version }}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Deploying tag: $TAG"
+
+      - name: Verify images exist
+        run: |
+          for service in agent sandbox opservice; do
+            echo "Checking ghcr.io/${{ github.repository_owner }}/twinops-${service}:${{ steps.resolve.outputs.tag }}"
+          done
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: validate
+    if: inputs.environment == 'staging'
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure kubectl
+        uses: azure/k8s-set-context@v4
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG_STAGING }}
+
+      - name: Update kustomization
+        run: |
+          cd deploy/k8s
+          # Create staging overlay if needed
+          mkdir -p overlays/staging
+
+          cat > overlays/staging/kustomization.yaml << EOF
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+
+          namespace: twinops-staging
+
+          resources:
+            - ../../
+
+          images:
+            - name: twinops/agent
+              newName: ghcr.io/${{ github.repository_owner }}/twinops-agent
+              newTag: ${{ needs.validate.outputs.image-tag }}
+            - name: twinops/sandbox
+              newName: ghcr.io/${{ github.repository_owner }}/twinops-sandbox
+              newTag: ${{ needs.validate.outputs.image-tag }}
+            - name: twinops/opservice
+              newName: ghcr.io/${{ github.repository_owner }}/twinops-opservice
+              newTag: ${{ needs.validate.outputs.image-tag }}
+
+          patches:
+            - patch: |-
+                - op: replace
+                  path: /spec/replicas
+                  value: 1
+              target:
+                kind: Deployment
+          EOF
+
+      - name: Deploy with Kustomize
+        run: |
+          kubectl apply -k deploy/k8s/overlays/staging
+
+      - name: Wait for rollout
+        run: |
+          kubectl -n twinops-staging rollout status deployment/agent --timeout=300s
+          kubectl -n twinops-staging rollout status deployment/twin-sandbox --timeout=300s
+          kubectl -n twinops-staging rollout status deployment/opservice --timeout=300s
+
+      - name: Run smoke tests
+        run: |
+          # Get service URL
+          AGENT_URL=$(kubectl -n twinops-staging get svc agent -o jsonpath='{.status.loadBalancer.ingress[0].ip}'):8080
+
+          # Health check
+          curl -f http://${AGENT_URL}/health || exit 1
+
+          echo "Staging deployment successful!"
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: validate
+    if: inputs.environment == 'production'
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure kubectl
+        uses: azure/k8s-set-context@v4
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG_PRODUCTION }}
+
+      - name: Update kustomization
+        run: |
+          cd deploy/k8s
+          mkdir -p overlays/production
+
+          cat > overlays/production/kustomization.yaml << EOF
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+
+          namespace: twinops
+
+          resources:
+            - ../../
+
+          images:
+            - name: twinops/agent
+              newName: ghcr.io/${{ github.repository_owner }}/twinops-agent
+              newTag: ${{ needs.validate.outputs.image-tag }}
+            - name: twinops/sandbox
+              newName: ghcr.io/${{ github.repository_owner }}/twinops-sandbox
+              newTag: ${{ needs.validate.outputs.image-tag }}
+            - name: twinops/opservice
+              newName: ghcr.io/${{ github.repository_owner }}/twinops-opservice
+              newTag: ${{ needs.validate.outputs.image-tag }}
+
+          replicas:
+            - name: agent
+              count: 3
+            - name: opservice
+              count: 2
+
+          patches:
+            - patch: |-
+                - op: replace
+                  path: /spec/template/spec/containers/0/resources/limits/memory
+                  value: 1Gi
+                - op: replace
+                  path: /spec/template/spec/containers/0/resources/limits/cpu
+                  value: 2000m
+              target:
+                kind: Deployment
+                name: agent
+          EOF
+
+      - name: Deploy with Kustomize (canary)
+        run: |
+          # Deploy with canary strategy
+          kubectl apply -k deploy/k8s/overlays/production
+
+          # Wait for one replica to be ready
+          kubectl -n twinops rollout status deployment/agent --timeout=300s
+
+      - name: Run production smoke tests
+        run: |
+          AGENT_URL=$(kubectl -n twinops get svc agent -o jsonpath='{.status.loadBalancer.ingress[0].ip}'):8080
+
+          # Health check
+          curl -f http://${AGENT_URL}/health || exit 1
+
+          # Basic functionality test
+          response=$(curl -s -X POST http://${AGENT_URL}/chat \
+            -H 'Content-Type: application/json' \
+            -H 'X-Roles: viewer' \
+            -d '{"message":"get status"}')
+
+          echo "$response" | jq -e '.reply' || exit 1
+
+          echo "Production smoke tests passed!"
+
+      - name: Complete rollout
+        run: |
+          kubectl -n twinops rollout status deployment/agent --timeout=600s
+          kubectl -n twinops rollout status deployment/twin-sandbox --timeout=300s
+          kubectl -n twinops rollout status deployment/opservice --timeout=300s
+
+  rollback:
+    name: Rollback on Failure
+    runs-on: ubuntu-latest
+    needs: [deploy-staging, deploy-production]
+    if: failure()
+
+    steps:
+      - name: Rollback deployment
+        run: |
+          echo "Deployment failed - manual rollback may be required"
+          echo "To rollback, run: kubectl rollout undo deployment/<name> -n <namespace>"

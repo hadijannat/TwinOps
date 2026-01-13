@@ -1,0 +1,16 @@
+# Auto-assign reviewers configuration
+
+addReviewers: true
+addAssignees: author
+
+# Reviewers to assign
+reviewers:
+  - maintainers
+
+# Number of reviewers to add
+numberOfReviewers: 1
+
+# Skip if PR contains specific keywords
+skipKeywords:
+  - wip
+  - draft

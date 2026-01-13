@@ -1,5 +1,13 @@
 # TwinOps
 
+[![CI](https://github.com/rwth-ias/twinops/actions/workflows/ci.yml/badge.svg)](https://github.com/rwth-ias/twinops/actions/workflows/ci.yml)
+[![Security](https://github.com/rwth-ias/twinops/actions/workflows/security.yml/badge.svg)](https://github.com/rwth-ias/twinops/actions/workflows/security.yml)
+[![codecov](https://codecov.io/gh/rwth-ias/twinops/branch/main/graph/badge.svg)](https://codecov.io/gh/rwth-ias/twinops)
+[![PyPI version](https://badge.fury.io/py/twinops.svg)](https://badge.fury.io/py/twinops)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](https://github.com/rwth-ias/twinops/pkgs/container/twinops-agent)
+
 **Production-Grade AI Agents for BaSyx Digital Twins**
 
 A reference architecture for event-driven, safety-governed industrial AI that interacts with Asset Administration Shell (AAS) runtimes.
