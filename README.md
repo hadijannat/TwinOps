@@ -74,6 +74,33 @@ docker compose up -e TWINOPS_LLM_PROVIDER=anthropic \
 
 ---
 
+## 🎬 Demo Showcase
+
+Run the interactive demo UI (Docker):
+
+```bash
+# Start backend + demo UI
+docker compose up --build demo
+
+# Open the demo UI
+open http://localhost:5173
+```
+
+Suggested video flow (2–3 minutes):
+
+1. Viewer role → try “Start pump” → RBAC denied  
+2. Raise temperature > 95°C → “Start pump” → interlock denied  
+3. Operator role → “Set speed to 1500 RPM” → simulation forced  
+4. “Emergency stop” → HITL approval → approve → execute  
+5. Show audit log entries on the right panel
+
+When you record the walkthrough, drop the assets here:
+
+- `assets/demo/twinops-demo.gif`
+- `assets/demo/twinops-demo.mp4`
+
+---
+
 ## 🏗️ Architecture
 
 ```mermaid

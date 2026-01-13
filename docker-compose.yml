@@ -85,6 +85,20 @@ services:
       - opservice
     restart: unless-stopped
 
+  # Interactive Demo UI
+  demo:
+    build:
+      context: ./demo
+      dockerfile: Dockerfile
+    container_name: twinops-demo
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_AGENT_URL=http://agent:8080
+    depends_on:
+      - agent
+    restart: unless-stopped
+
 volumes:
   mosquitto-data:
   agent-audit:
