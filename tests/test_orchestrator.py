@@ -29,8 +29,11 @@ def mock_shadow():
 @pytest.fixture
 def mock_safety():
     """Mock safety kernel."""
-    safety = AsyncMock()
+    safety = MagicMock()
     safety.evaluate = AsyncMock()
+    safety.create_approval_task = AsyncMock()
+    safety.log_execution = MagicMock()
+    safety.log_error = MagicMock()
     safety._pending_approvals = {}
     return safety
 

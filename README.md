@@ -365,6 +365,50 @@ export TWINOPS_MTLS_SUBJECT_HEADER=X-SSL-Client-DN
 
 ---
 
+## 🧰 Ops Runbook (mTLS)
+
+### Generate a minimal CA + client cert (local/dev)
+
+```bash
+# Create a local CA
+openssl genrsa -out ca.key 4096
+openssl req -x509 -new -nodes -key ca.key -sha256 -days 3650 \
+  -subj "/CN=TwinOps-CA" -out ca.crt
+
+# Issue a client certificate
+openssl genrsa -out client.key 2048
+openssl req -new -key client.key -subj "/CN=ops-client/OU=TwinOps" -out client.csr
+openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -out client.crt -days 365 -sha256
+```
+
+### Example reverse proxy (Nginx)
+
+```nginx
+server {
+  listen 443 ssl;
+  ssl_certificate     /etc/ssl/certs/server.crt;
+  ssl_certificate_key /etc/ssl/private/server.key;
+  ssl_client_certificate /etc/ssl/certs/ca.crt;
+  ssl_verify_client on;
+
+  location / {
+    proxy_set_header X-SSL-Client-DN $ssl_client_s_dn;
+    proxy_set_header X-Forwarded-Client-Cert $ssl_client_cert;
+    proxy_pass http://agent:8080;
+  }
+}
+```
+
+Then enable proxy trust:
+
+```bash
+export TWINOPS_MTLS_TRUST_PROXY_HEADERS=true
+export TWINOPS_MTLS_SUBJECT_HEADER=X-SSL-Client-DN
+```
+
+---
+
 ## 📈 Multi-Worker & Metrics
 
 ```bash
