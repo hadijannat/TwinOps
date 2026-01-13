@@ -1,4 +1,4 @@
-# TwinOps
+# 🏭 TwinOps
 
 [![CI](https://github.com/rwth-ias/twinops/actions/workflows/ci.yml/badge.svg)](https://github.com/rwth-ias/twinops/actions/workflows/ci.yml)
 [![Security](https://github.com/rwth-ias/twinops/actions/workflows/security.yml/badge.svg)](https://github.com/rwth-ias/twinops/actions/workflows/security.yml)
@@ -8,22 +8,38 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](https://github.com/rwth-ias/twinops/pkgs/container/twinops-agent)
 
-**Production-Grade AI Agents for BaSyx Digital Twins**
+> **Production-Grade AI Agents for BaSyx Digital Twins**
 
 A reference architecture for event-driven, safety-governed industrial AI that interacts with Asset Administration Shell (AAS) runtimes.
 
-## Overview
+---
 
-TwinOps provides a complete framework for deploying AI agents that safely interact with industrial digital twins. Unlike demonstration prototypes, this architecture addresses critical engineering gaps required for production deployment:
+## ✨ Why TwinOps?
 
-- **Split-brain state prevention** through MQTT-driven Shadow Twin synchronization
-- **Asynchronous operation handling** via the Command-Monitor job pattern
-- **Context window management** through semantic capability indexing
-- **Industrial-grade safety** with RBAC, interlocks, simulation forcing, and HITL approval gates
-- **Tamper-evident governance** via cryptographically signed Policy-as-AAS (CovenantTwin)
-- **Immutable audit logging** with hash-chained entries
+| Feature | Benefit |
+|:-------:|---------|
+| 🔄 **Shadow Twin Sync** | Real-time state via MQTT — no split-brain issues |
+| 🛡️ **5-Layer Safety** | RBAC → Interlocks → Simulation → HITL → Audit |
+| 📜 **CovenantTwin** | Cryptographically signed policies embedded in AAS |
+| ⚡ **Command-Monitor** | Async job handling with automatic progress tracking |
+| 🔍 **Semantic Indexing** | Smart tool selection using TF-IDF capability matching |
+| 🔗 **Hash-Chained Audit** | Tamper-evident immutable logging for compliance |
 
-## Quick Start
+---
+
+## 🚀 Quick Start
+
+```mermaid
+flowchart LR
+    A["📦 Clone Repo"] --> B["🐳 Docker Compose Up"]
+    B --> C["💬 Send Command"]
+    C --> D["✅ See Response"]
+    
+    style A fill:#3498db,color:#fff
+    style B fill:#2ecc71,color:#fff
+    style C fill:#f39c12,color:#fff
+    style D fill:#9b59b6,color:#fff
+```
 
 ### Prerequisites
 
@@ -51,85 +67,134 @@ curl -s http://localhost:8080/chat \
 # Set your API key
 export ANTHROPIC_API_KEY=your-key-here
 
-# Update docker-compose.yml to use anthropic provider
-# Or set environment variable:
-docker compose up -e TWINOPS_LLM_PROVIDER=anthropic -e TWINOPS_ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
+# Start with Anthropic provider
+docker compose up -e TWINOPS_LLM_PROVIDER=anthropic \
+  -e TWINOPS_ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
 ```
 
-## Architecture
+---
 
+## 🏗️ Architecture
+
+```mermaid
+flowchart TB
+    subgraph Agent["🤖 AI Agent Layer"]
+        LLM["LLM Client<br/><i>Anthropic / OpenAI / Rules</i>"]
+        CAP["Capability Index<br/><i>TF-IDF Semantic Search</i>"]
+        SAFETY["Safety Kernel<br/><i>5-Layer Defense</i>"]
+        ORCH["Orchestrator<br/><i>Tool Execution Loop</i>"]
+    end
+    
+    subgraph Twin["📡 Digital Twin Layer"]
+        SHADOW["Shadow Twin Manager<br/><i>MQTT Live Sync</i>"]
+        CLIENT["Twin Client<br/><i>HTTP Operations</i>"]
+        OPS["Operation Service<br/><i>Delegated Execution</i>"]
+    end
+    
+    subgraph External["🏭 BaSyx Infrastructure"]
+        MQTT[("MQTT Broker<br/>:1883")]
+        AAS[("AAS Repository<br/>:8081")]
+    end
+    
+    LLM --> ORCH
+    CAP --> ORCH
+    ORCH --> SAFETY
+    ORCH --> SHADOW
+    ORCH --> CLIENT
+    SHADOW <--> MQTT
+    CLIENT --> AAS
+    OPS --> AAS
+    
+    style Agent fill:#e8f4fd,stroke:#3498db
+    style Twin fill:#e8fdf4,stroke:#2ecc71
+    style External fill:#fdf4e8,stroke:#f39c12
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         AI Agent                                 │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-│  │ LLM Client  │  │ Capability  │  │    Safety Kernel        │  │
-│  │ (Anthropic/ │  │   Index     │  │ - RBAC                  │  │
-│  │  OpenAI/    │  │ (TF-IDF)    │  │ - Interlocks            │  │
-│  │  Rules)     │  │             │  │ - Simulation Forcing    │  │
-│  └──────┬──────┘  └──────┬──────┘  │ - HITL Approval         │  │
-│         │                │         │ - Audit Logging         │  │
-│         └───────┬────────┘         └───────────┬─────────────┘  │
-│                 │                              │                 │
-│         ┌───────┴──────────────────────────────┴───────┐        │
-│         │              Orchestrator                     │        │
-│         └───────────────────┬──────────────────────────┘        │
-└─────────────────────────────┼───────────────────────────────────┘
-                              │
-          ┌───────────────────┼───────────────────┐
-          │                   │                   │
-    ┌─────┴─────┐      ┌──────┴──────┐     ┌──────┴──────┐
-    │  Shadow   │      │   Twin      │     │  Operation  │
-    │   Twin    │◄────►│   Client    │     │   Service   │
-    │  Manager  │      │   (HTTP)    │     │ (Delegated) │
-    └─────┬─────┘      └─────────────┘     └─────────────┘
-          │                   │
-    ┌─────┴─────┐      ┌──────┴──────┐
-    │   MQTT    │      │    AAS      │
-    │  Broker   │      │ Repository  │
-    └───────────┘      └─────────────┘
+
+---
+
+## 📊 How It Works
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Agent as 🤖 Agent
+    participant Safety as 🛡️ Safety Kernel
+    participant Shadow as 📡 Shadow Twin
+    participant AAS as 🏭 AAS Repository
+    
+    User->>Agent: "Set speed to 1200 RPM"
+    Agent->>Agent: LLM interprets intent
+    Agent->>Safety: Evaluate SetSpeed(1200)
+    
+    Note over Safety: Layer 1: RBAC Check
+    Safety->>Safety: Role 'operator' allowed ✓
+    
+    Note over Safety: Layer 2: Interlock Check
+    Safety->>Shadow: Get current state
+    Shadow-->>Safety: Temperature OK ✓
+    
+    Note over Safety: Layer 3: Risk Assessment
+    Safety-->>Agent: HIGH risk → Force simulation
+    
+    Agent->>AAS: Simulate SetSpeed(1200)
+    AAS-->>Agent: Simulation successful ✓
+    
+    Agent-->>User: "Simulation OK. Re-issue to execute."
 ```
 
-## Components
+---
 
-### Core Services
+## 🛡️ Five-Layer Safety Model
 
-| Service | Port | Description |
-|---------|------|-------------|
-| `agent` | 8080 | AI agent HTTP API |
-| `twin-sandbox` | 8081 | Local AAS mock server |
-| `opservice` | 8087 | Operation delegation service |
-| `mqtt` | 1883 | MQTT broker for events |
+TwinOps implements defense-in-depth to prevent unsafe AI operations:
 
-### Key Modules
+```mermaid
+flowchart TB
+    subgraph Defense["🛡️ Five-Layer Defense Model"]
+        direction TB
+        L5["📜 <b>Layer 5: Audit Logging</b><br/>Hash-chained tamper-evident logs"]
+        L4["👤 <b>Layer 4: HITL Approval</b><br/>Human gates for CRITICAL operations"]
+        L3["🔬 <b>Layer 3: Simulation Forcing</b><br/>Automatic dry-run for HIGH risk ops"]
+        L2["⚠️ <b>Layer 2: Interlocks</b><br/>Predicate-based state guards"]
+        L1["🔐 <b>Layer 1: RBAC</b><br/>Role-based access control"]
+    end
+    
+    L1 --> L2 --> L3 --> L4 --> L5
+    
+    style L5 fill:#27ae60,color:#fff
+    style L4 fill:#f39c12,color:#fff
+    style L3 fill:#e67e22,color:#fff
+    style L2 fill:#e74c3c,color:#fff
+    style L1 fill:#9b59b6,color:#fff
+```
 
-- **Shadow Twin Manager** (`agent/shadow.py`): Live synchronized AAS state via MQTT
-- **Schema Generator** (`agent/schema_gen.py`): AAS Operation → LLM Tool conversion
-- **Capability Index** (`agent/capabilities.py`): Semantic tool retrieval
-- **Safety Kernel** (`agent/safety.py`): Multi-layer defense model
-- **Policy Signing** (`agent/policy_signing.py`): CovenantTwin Ed25519 verification
+### Risk Level Matrix
 
-## Safety Model
+```mermaid
+flowchart LR
+    subgraph Matrix["Risk Levels & Controls"]
+        LOW["🟢 <b>LOW</b><br/>Status queries"]
+        MED["🟡 <b>MEDIUM</b><br/>Minor setpoint changes"]
+        HIGH["🟠 <b>HIGH</b><br/>Equipment actuation"]
+        CRIT["🔴 <b>CRITICAL</b><br/>Safety-critical ops"]
+    end
+    
+    LOW --> E1["Execute Immediately"]
+    MED --> E2["Execute Immediately"]
+    HIGH --> S1["🔬 Simulation First"]
+    CRIT --> H1["👤 Simulation + HITL"]
+    
+    style LOW fill:#27ae60,color:#fff
+    style MED fill:#f1c40f,color:#000
+    style HIGH fill:#e67e22,color:#fff
+    style CRIT fill:#e74c3c,color:#fff
+```
 
-TwinOps implements a five-layer defense model:
+---
 
-1. **RBAC**: Role-based access control per operation
-2. **Interlocks**: Predicate-based safety checks against live state
-3. **Simulation Forcing**: Automatic dry-run for high-risk operations
-4. **HITL Approval**: Human approval gates for critical operations
-5. **Audit Logging**: Hash-chained tamper-evident logs
+## 📜 CovenantTwin
 
-### Risk Levels
-
-| Level | Simulation | Approval | Examples |
-|-------|------------|----------|----------|
-| LOW | No | No | Status queries |
-| MEDIUM | No | No | Minor setpoint changes |
-| HIGH | **Yes** | No | Equipment actuation |
-| CRITICAL | **Yes** | **Yes** | Safety-critical ops |
-
-## CovenantTwin
-
-CovenantTwin embeds cryptographically signed safety policies directly within the AAS:
+CovenantTwin embeds **cryptographically signed safety policies** directly within the AAS:
 
 ```json
 {
@@ -155,7 +220,7 @@ CovenantTwin embeds cryptographically signed safety policies directly within the
 }
 ```
 
-### Signing Policies
+### 🔑 Signing Policies
 
 ```bash
 # Generate key pair
@@ -168,7 +233,42 @@ python scripts/sign_policy.py \
   --output models/policy_signed.json
 ```
 
-## CLI Usage
+---
+
+## 🧩 Components
+
+### Core Services
+
+| Service | Port | Description |
+|---------|:----:|-------------|
+| `agent` | 8080 | AI agent HTTP API |
+| `twin-sandbox` | 8081 | Local AAS mock server |
+| `opservice` | 8087 | Operation delegation service |
+| `mqtt` | 1883 | MQTT broker for events |
+
+### Key Modules
+
+```mermaid
+graph TB
+    subgraph Modules["📦 Agent Modules"]
+        SM["shadow.py<br/><i>Shadow Twin Manager</i>"]
+        SG["schema_gen.py<br/><i>AAS → LLM Tool Converter</i>"]
+        CI["capabilities.py<br/><i>Semantic Capability Index</i>"]
+        SK["safety.py<br/><i>Safety Kernel</i>"]
+        PS["policy_signing.py<br/><i>CovenantTwin Ed25519</i>"]
+        OR["orchestrator.py<br/><i>Main Agent Loop</i>"]
+    end
+    
+    OR --> SM & SK & CI
+    SK --> PS
+    SG --> CI
+    
+    style Modules fill:#f5f5f5,stroke:#333
+```
+
+---
+
+## 💻 CLI Usage
 
 ```bash
 # List pending approval tasks
@@ -187,7 +287,9 @@ twinops verify-audit --log-path audit_logs/audit.jsonl
 twinops show-audit --last 20 --filter-event executed
 ```
 
-## Deployment
+---
+
+## 🚢 Deployment
 
 ### Docker Compose (Development)
 
@@ -212,7 +314,9 @@ kubectl apply -f deploy/k8s/namespace.yaml
 kubectl apply -f deploy/k8s/
 ```
 
-## Configuration
+---
+
+## ⚙️ Configuration
 
 Environment variables (prefix: `TWINOPS_`):
 
@@ -226,7 +330,9 @@ Environment variables (prefix: `TWINOPS_`):
 | `AAS_ID` | `urn:example:aas:pump-001` | Target AAS identifier |
 | `REPO_ID` | `default` | Repository ID for MQTT topics |
 
-## API Reference
+---
+
+## 📡 API Reference
 
 ### POST /chat
 
@@ -239,7 +345,7 @@ curl -X POST http://localhost:8080/chat \
   -d '{"message": "Start the pump"}'
 ```
 
-Response:
+**Response:**
 ```json
 {
   "reply": "Simulation completed for 'StartPump'. To execute for real, re-issue with simulate=false.",
@@ -262,7 +368,9 @@ Health check endpoint.
 
 Reset conversation history.
 
-## Development
+---
+
+## 🛠️ Development
 
 ### Local Setup
 
@@ -289,30 +397,28 @@ ruff check src/
 ```
 twinops/
 ├── src/twinops/
-│   ├── agent/           # AI agent components
-│   │   ├── shadow.py    # Shadow Twin Manager
-│   │   ├── schema_gen.py # Tool schema generation
+│   ├── agent/              # 🤖 AI agent components
+│   │   ├── shadow.py       # Shadow Twin Manager
+│   │   ├── schema_gen.py   # Tool schema generation
 │   │   ├── capabilities.py # Capability index
-│   │   ├── safety.py    # Safety kernel
+│   │   ├── safety.py       # Safety kernel
 │   │   ├── policy_signing.py # CovenantTwin
 │   │   ├── orchestrator.py # Main agent loop
-│   │   └── llm/         # LLM integrations
-│   ├── sandbox/         # Local AAS mock
-│   ├── opservice/       # Operation delegation
-│   ├── common/          # Shared utilities
-│   └── cli.py           # CLI tool
-├── models/              # Sample AAS data
-├── scripts/             # Utility scripts
-├── docker/              # Dockerfiles
-├── deploy/k8s/          # Kubernetes manifests
-└── infra/               # Infrastructure configs
+│   │   └── llm/            # LLM integrations
+│   ├── sandbox/            # 📦 Local AAS mock
+│   ├── opservice/          # ⚡ Operation delegation
+│   ├── common/             # 🔧 Shared utilities
+│   └── cli.py              # 💻 CLI tool
+├── models/                 # 📄 Sample AAS data
+├── scripts/                # 📜 Utility scripts
+├── docker/                 # 🐳 Dockerfiles
+├── deploy/k8s/             # ☸️ Kubernetes manifests
+└── infra/                  # 🏗️ Infrastructure configs
 ```
 
-## License
+---
 
-MIT License - see LICENSE file.
-
-## References
+## 📚 References
 
 - [BaSyx Wiki - MQTT Feature](https://wiki.basyx.org/en/latest/content/user_documentation/basyx_components/v2/aas_repository/features/mqtt.html)
 - [BaSyx Wiki - Operation Delegation](https://wiki.basyx.org/en/latest/content/user_documentation/basyx_components/v2/submodel_repository/features/operation-delegation.html)
@@ -320,4 +426,12 @@ MIT License - see LICENSE file.
 
 ---
 
-*Developed by RWTH Aachen University - Chair of Information and Automation Systems*
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE) file.
+
+---
+
+<p align="center">
+  <i>Developed by RWTH Aachen University — Chair of Information and Automation Systems</i>
+</p>

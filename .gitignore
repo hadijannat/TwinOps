@@ -92,6 +92,7 @@ dmypy.json
 logs/
 *.sqlite
 *.db
+AGENTS.md
 
 # Audit logs (contain sensitive operation data)
 audit_logs/
