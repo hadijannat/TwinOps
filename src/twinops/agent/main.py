@@ -1213,6 +1213,151 @@ class AgentServer:
                         },
                     }
                 },
+                "/tasks/{task_id}": {
+                    "get": {
+                        "summary": "Get task details",
+                        "description": "Fetch details for a specific task.",
+                        "operationId": "getTask",
+                        "tags": ["Approval"],
+                        "parameters": [
+                            {
+                                "name": "task_id",
+                                "in": "path",
+                                "description": "Task identifier",
+                                "required": True,
+                                "schema": {"type": "string"},
+                            }
+                        ],
+                        "responses": {
+                            "200": {
+                                "description": "Task details",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "task": {"type": "object"},
+                                            },
+                                        }
+                                    }
+                                },
+                            },
+                            "400": {
+                                "description": "Invalid request",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                            "401": {
+                                "description": "Unauthorized",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                            "403": {
+                                "description": "Forbidden",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                            "404": {
+                                "description": "Task not found",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                            "503": {
+                                "description": "Service unavailable",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                        },
+                    }
+                },
+                "/tasks/{task_id}/execute": {
+                    "post": {
+                        "summary": "Execute an approved task",
+                        "description": "Execute a task that has already been approved.",
+                        "operationId": "executeTask",
+                        "tags": ["Approval"],
+                        "parameters": [
+                            {
+                                "name": "task_id",
+                                "in": "path",
+                                "description": "Task identifier",
+                                "required": True,
+                                "schema": {"type": "string"},
+                            }
+                        ],
+                        "responses": {
+                            "200": {
+                                "description": "Task execution response",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "reply": {"type": "string"},
+                                                "tool_results": {"type": "array"},
+                                            },
+                                        }
+                                    }
+                                },
+                            },
+                            "400": {
+                                "description": "Invalid request",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                            "401": {
+                                "description": "Unauthorized",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                            "403": {
+                                "description": "Forbidden",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                            "500": {
+                                "description": "Operation failed",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                            "503": {
+                                "description": "Service unavailable",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                        },
+                    }
+                },
                 "/metrics": {
                     "get": {
                         "summary": "Prometheus metrics",

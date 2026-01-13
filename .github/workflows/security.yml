@@ -14,6 +14,25 @@ permissions:
   security-events: write
 
 jobs:
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      container_scan: ${{ steps.filter.outputs.container_scan }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            container_scan:
+              - 'src/**'
+              - 'docker/**'
+              - 'pyproject.toml'
+              - 'docker-compose*.yml'
+              - 'deploy/k8s/**'
+              - 'infra/**'
+
   dependency-scan:
     name: Dependency Vulnerability Scan
     runs-on: ubuntu-latest
@@ -151,6 +170,8 @@ jobs:
   container-scan:
     name: Container Vulnerability Scan
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: github.event_name == 'schedule' || github.event_name != 'pull_request' || needs.changes.outputs.container_scan == 'true'
     strategy:
       matrix:
         service: [agent, sandbox, opservice]
