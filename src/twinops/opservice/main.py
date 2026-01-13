@@ -14,7 +14,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 import uvicorn
 
-from twinops.common.auth import AuthMiddleware
+from twinops.common.auth import AuthMiddleware, HmacAuthMiddleware
 from twinops.common.http import RequestIdMiddleware
 from twinops.common.logging import get_logger, setup_logging
 from twinops.common.metrics import MetricsMiddleware, metrics_endpoint
@@ -38,6 +38,8 @@ class Job:
     completed_at: float | None = None
     result: dict[str, Any] | None = None
     error: str | None = None
+    request_id: str | None = None
+    subject: str | None = None
 
 
 class OperationExecutor:
@@ -57,6 +59,8 @@ class OperationExecutor:
         operation: str,
         input_args: list[dict[str, Any]],
         simulate: bool = False,
+        request_id: str | None = None,
+        subject: str | None = None,
     ) -> dict[str, Any]:
         """
         Execute an operation.
@@ -77,7 +81,7 @@ class OperationExecutor:
 
         # Create async job
         job_id = f"job-{uuid.uuid4().hex[:8]}"
-        job = Job(job_id=job_id, operation=operation)
+        job = Job(job_id=job_id, operation=operation, request_id=request_id, subject=subject)
         self._jobs[job_id] = job
 
         # Start async execution
@@ -258,7 +262,16 @@ class OperationServer:
             args=input_args,
         )
 
-        result = await self._executor.execute(operation, input_args, simulate)
+        subject = getattr(getattr(request.state, "auth", None), "subject", None)
+        request_id = getattr(request.state, "request_id", None)
+
+        result = await self._executor.execute(
+            operation,
+            input_args,
+            simulate,
+            request_id=request_id,
+            subject=subject,
+        )
 
         status_code = 200 if simulate else 202
         return JSONResponse(result, status_code=status_code)
@@ -280,6 +293,8 @@ class OperationServer:
             "completed_at": job.completed_at,
             "result": job.result,
             "error": job.error,
+            "request_id": job.request_id,
+            "subject": job.subject,
         })
 
     async def handle_list_jobs(self, request: Request) -> JSONResponse:
@@ -293,6 +308,8 @@ class OperationServer:
                     "status": j.status,
                     "progress": j.progress,
                     "started_at": j.started_at,
+                    "request_id": j.request_id,
+                    "subject": j.subject,
                 }
                 for j in jobs
             ]
@@ -330,6 +347,7 @@ def create_app(settings: Settings | None = None) -> Starlette:
         exclude_paths=["/health", "/metrics"],
     )
     app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(HmacAuthMiddleware, settings=settings)
     app.add_middleware(AuthMiddleware, settings=settings)
     app.add_middleware(
         MetricsMiddleware,

@@ -1,0 +1,44 @@
+name: Performance
+
+on:
+  workflow_dispatch:
+
+jobs:
+  load-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -e .
+
+      - name: Start services
+        run: docker compose up -d --build
+
+      - name: Wait for agent readiness
+        run: |
+          for i in {1..30}; do
+            status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/ready)
+            if [ "$status" = "200" ]; then
+              echo "Agent ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Agent not ready in time"
+          docker compose logs
+          exit 1
+
+      - name: Run load test
+        run: python scripts/load_test_agent.py --requests 50 --concurrency 5
+
+      - name: Shutdown services
+        if: always()
+        run: docker compose down

@@ -16,6 +16,8 @@ from starlette.types import ASGIApp
 from twinops.common.logging import get_logger
 from twinops.common.settings import Settings
 from twinops.common.http import set_subject
+from twinops.common.hmac import build_message, verify
+import time
 
 logger = get_logger(__name__)
 
@@ -157,4 +159,52 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         request.state.auth = auth
         set_subject(auth.subject)
+        return await call_next(request)
+
+
+class HmacAuthMiddleware(BaseHTTPMiddleware):
+    """HMAC auth middleware for service-to-service requests."""
+
+    def __init__(self, app: ASGIApp, settings: Settings) -> None:
+        super().__init__(app)
+        self._settings = settings
+        self._exempt_paths = set(settings.opservice_auth_exempt_paths)
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        if self._settings.opservice_auth_mode != "hmac":
+            return await call_next(request)
+
+        if request.url.path in self._exempt_paths:
+            return await call_next(request)
+
+        secret = self._settings.opservice_hmac_secret
+        if not secret:
+            return JSONResponse(
+                {"error": "HMAC secret not configured"},
+                status_code=500,
+            )
+
+        signature = request.headers.get(self._settings.opservice_hmac_header)
+        timestamp = request.headers.get(self._settings.opservice_hmac_timestamp_header)
+        if not signature or not timestamp:
+            return JSONResponse({"error": "Missing HMAC headers"}, status_code=401)
+
+        try:
+            ts_value = int(timestamp)
+        except ValueError:
+            return JSONResponse({"error": "Invalid HMAC timestamp"}, status_code=401)
+
+        now = int(time.time())
+        if abs(now - ts_value) > self._settings.opservice_hmac_ttl_seconds:
+            return JSONResponse({"error": "HMAC timestamp expired"}, status_code=401)
+
+        path = request.url.path
+        if request.url.query:
+            path = f"{path}?{request.url.query}"
+
+        body = await request.body()
+        message = build_message(timestamp, request.method, path, body)
+        if not verify(secret, message, signature):
+            return JSONResponse({"error": "Invalid HMAC signature"}, status_code=401)
+
         return await call_next(request)

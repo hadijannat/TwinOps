@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Any
 
 import aiohttp
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 import ssl
 
 from twinops.common.basyx_topics import b64url_encode_nopad
@@ -15,6 +15,7 @@ from twinops.common.logging import get_logger
 from twinops.common.settings import Settings
 from twinops.common.tracing import span
 from twinops.common.http import get_request_id
+from twinops.common.hmac import build_message, sign
 
 logger = get_logger(__name__)
 
@@ -181,6 +182,7 @@ class TwinClient:
         """
         self._aas_base = settings.twin_base_url.rstrip("/")
         self._sm_base = (settings.submodel_base_url or settings.twin_base_url).rstrip("/")
+        self._settings = settings
         self._timeout = aiohttp.ClientTimeout(total=settings.http_timeout)
         self._session: aiohttp.ClientSession | None = None
         self._connector = None
@@ -523,6 +525,21 @@ class TwinClient:
                 "simulate": simulate,
             },
         }
+        body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+
+        if self._settings.opservice_auth_mode == "hmac":
+            secret = self._settings.opservice_hmac_secret
+            if secret:
+                timestamp = str(int(time.time()))
+                split = urlsplit(delegation_url)
+                path = split.path
+                if split.query:
+                    path = f"{path}?{split.query}"
+                message = build_message(timestamp, "POST", path, body)
+                signature = sign(secret, message)
+                headers[self._settings.opservice_hmac_header] = signature
+                headers[self._settings.opservice_hmac_timestamp_header] = timestamp
 
         logger.debug(
             "Invoking delegated operation",
@@ -533,8 +550,8 @@ class TwinClient:
         response = await self._protected_request(
             "POST",
             delegation_url,
-            json=payload,
-            headers={"Content-Type": "application/json"},
+            data=body,
+            headers=headers,
         )
         async with response:
             if response.status not in (200, 202):

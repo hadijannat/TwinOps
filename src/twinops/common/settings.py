@@ -176,6 +176,30 @@ class Settings(BaseSettings):
         default=("/health", "/ready"),
         description="Paths exempt from authentication",
     )
+    opservice_auth_mode: Literal["none", "hmac"] = Field(
+        default="none",
+        description="Authentication mode for opservice endpoints",
+    )
+    opservice_auth_exempt_paths: tuple[str, ...] = Field(
+        default=("/health", "/metrics"),
+        description="Paths exempt from opservice auth",
+    )
+    opservice_hmac_secret: str | None = Field(
+        default=None,
+        description="Shared secret for opservice HMAC auth",
+    )
+    opservice_hmac_header: str = Field(
+        default="X-TwinOps-Signature",
+        description="Header carrying HMAC signature",
+    )
+    opservice_hmac_timestamp_header: str = Field(
+        default="X-TwinOps-Timestamp",
+        description="Header carrying HMAC timestamp",
+    )
+    opservice_hmac_ttl_seconds: int = Field(
+        default=300,
+        description="Max age (seconds) for opservice HMAC signatures",
+    )
     mtls_role_map: dict[str, list[str]] = Field(
         default_factory=dict,
         description="Mapping of certificate subject to roles (JSON)",
@@ -295,6 +319,30 @@ class Settings(BaseSettings):
     tool_execution_timeout: float | None = Field(
         default=None,
         description="Max seconds to wait for a tool execution before timing out",
+    )
+    tool_retry_max_attempts: int = Field(
+        default=1,
+        description="Max retry attempts for tool execution on transient errors",
+    )
+    tool_retry_base_delay: float = Field(
+        default=0.5,
+        description="Base delay for tool retry backoff",
+    )
+    tool_retry_max_delay: float = Field(
+        default=5.0,
+        description="Max delay for tool retry backoff",
+    )
+    tool_retry_jitter: float = Field(
+        default=0.2,
+        description="Jitter ratio for tool retry backoff",
+    )
+    tool_idempotency_ttl_seconds: float = Field(
+        default=300.0,
+        description="TTL for tool idempotency cache entries",
+    )
+    tool_idempotency_max_entries: int = Field(
+        default=1000,
+        description="Max entries for tool idempotency cache",
     )
 
     # Tracing

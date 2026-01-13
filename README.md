@@ -331,6 +331,12 @@ Environment variables (prefix: `TWINOPS_`):
 | `REPO_ID` | `default` | Repository ID for MQTT topics |
 | `AUTH_MODE` | `none` | API auth mode (`none` or `mtls`) |
 | `AUTH_EXEMPT_PATHS` | `["/health","/ready"]` | Paths exempt from auth (JSON array) |
+| `OPSERVICE_AUTH_MODE` | `none` | Opservice auth mode (`none` or `hmac`) |
+| `OPSERVICE_AUTH_EXEMPT_PATHS` | `["/health","/metrics"]` | Opservice auth exempt paths |
+| `OPSERVICE_HMAC_SECRET` | - | Shared HMAC secret for opservice |
+| `OPSERVICE_HMAC_HEADER` | `X-TwinOps-Signature` | HMAC signature header |
+| `OPSERVICE_HMAC_TIMESTAMP_HEADER` | `X-TwinOps-Timestamp` | HMAC timestamp header |
+| `OPSERVICE_HMAC_TTL_SECONDS` | `300` | Max age of HMAC signatures |
 | `MTLS_ROLE_MAP` | `{}` | JSON map of subject → roles (e.g., `{"CN=ops-client":["operator"]}`) |
 | `MTLS_TRUST_PROXY_HEADERS` | `false` | Trust mTLS headers from a reverse proxy |
 | `MTLS_SUBJECT_HEADER` | `X-SSL-Client-DN` | Header carrying client subject |
@@ -347,6 +353,12 @@ Environment variables (prefix: `TWINOPS_`):
 | `TOOL_CONCURRENCY_LIMIT` | - | Max concurrent tool executions |
 | `LLM_CONCURRENCY_LIMIT` | - | Max concurrent LLM requests |
 | `TOOL_EXECUTION_TIMEOUT` | - | Tool execution timeout (seconds) |
+| `TOOL_RETRY_MAX_ATTEMPTS` | `1` | Retry attempts for transient tool errors |
+| `TOOL_RETRY_BASE_DELAY` | `0.5` | Base delay for retry backoff |
+| `TOOL_RETRY_MAX_DELAY` | `5.0` | Max delay for retry backoff |
+| `TOOL_RETRY_JITTER` | `0.2` | Jitter ratio for retry backoff |
+| `TOOL_IDEMPOTENCY_TTL_SECONDS` | `300` | TTL for tool idempotency cache |
+| `TOOL_IDEMPOTENCY_MAX_ENTRIES` | `1000` | Max tool idempotency entries |
 | `JOB_POLL_MAX_INTERVAL` | `5.0` | Max backoff for job polling |
 | `JOB_POLL_JITTER` | `0.1` | Jitter ratio for job polling |
 | `TWIN_CLIENT_FAILURE_THRESHOLD` | `5` | Circuit breaker failures before opening |
@@ -422,6 +434,19 @@ export TWINOPS_MTLS_SUBJECT_HEADER=X-SSL-Client-DN
 
 ---
 
+## 🔏 Opservice HMAC Auth (Service-to-Service)
+
+Enable HMAC verification on opservice and signing from the agent:
+
+```bash
+export TWINOPS_OPSERVICE_AUTH_MODE=hmac
+export TWINOPS_OPSERVICE_HMAC_SECRET="super-secret"
+```
+
+The agent will sign delegated operation calls automatically when the secret is configured.
+
+---
+
 ## 📈 Multi-Worker & Metrics
 
 ```bash
@@ -441,6 +466,16 @@ export TWINOPS_TRACING_ENABLED=true
 export TWINOPS_TRACING_OTLP_ENDPOINT=http://localhost:4317
 export TWINOPS_TRACING_SERVICE_NAME=twinops-agent
 ```
+
+---
+
+## 📈 Load Test (Quick)
+
+```bash
+python scripts/load_test_agent.py --requests 50 --concurrency 5
+```
+
+The `performance` GitHub Action runs the same script on demand.
 
 ---
 

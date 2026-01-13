@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 import random
+import hashlib
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -13,10 +14,12 @@ from twinops.agent.llm.base import LlmClient, Message
 from twinops.agent.safety import SafetyKernel
 from twinops.agent.schema_gen import ToolSpec, tool_spec_to_llm_format
 from twinops.agent.shadow import ShadowTwinManager
-from twinops.agent.twin_client import TwinClient
+from twinops.agent.twin_client import TwinClient, TwinClientError
 from twinops.common.logging import get_logger
 from twinops.common.metrics import record_llm_call, record_job_result
 from twinops.common.tracing import span
+from twinops.common.http import get_request_id
+from twinops.common.idempotency import IdempotencyStore
 from twinops.common.settings import Settings
 
 logger = get_logger(__name__)
@@ -104,6 +107,10 @@ Be concise and focus on the task at hand."""
             asyncio.Semaphore(settings.llm_concurrency_limit)
             if settings.llm_concurrency_limit
             else None
+        )
+        self._idempotency = IdempotencyStore(
+            ttl_seconds=settings.tool_idempotency_ttl_seconds,
+            max_entries=settings.tool_idempotency_max_entries,
         )
 
     async def process_message(
@@ -225,6 +232,10 @@ Be concise and focus on the task at hand."""
 
         # Generate idempotency key for this action
         action_id = str(uuid.uuid4())
+        idempotency_key = self._build_idempotency_key(tool_name, params)
+        cached = self._idempotency.get(idempotency_key)
+        if cached:
+            return ToolResult(**cached)
         logger.debug("Starting tool execution", tool=tool_name, action_id=action_id)
 
         # Find tool spec
@@ -283,8 +294,8 @@ Be concise and focus on the task at hand."""
             async def _invoke_with_timeout() -> dict[str, Any]:
                 if self._tool_semaphore:
                     async with self._tool_semaphore:
-                        return await _invoke()
-                return await _invoke()
+                        return await self._invoke_with_retry(tool, params, action_id, _invoke)
+                return await self._invoke_with_retry(tool, params, action_id, _invoke)
 
             if self._settings.tool_execution_timeout:
                 result = await asyncio.wait_for(
@@ -296,12 +307,14 @@ Be concise and focus on the task at hand."""
         except Exception as e:
             self._safety.log_error(tool_name, roles, str(e), action_id)
             record_outcome("error", tool.risk_level)
-            return ToolResult(
+            result_obj = ToolResult(
                 tool_name=tool_name,
                 success=False,
                 error=str(e),
                 action_id=action_id,
             )
+            self._idempotency.set(idempotency_key, result_obj.__dict__)
+            return result_obj
 
         simulated = params.get("simulate", False)
         self._safety.log_execution(tool_name, tool.risk_level, roles, result, simulated, action_id)
@@ -317,7 +330,7 @@ Be concise and focus on the task at hand."""
                 action_id=action_id,
             )
             record_outcome("approval_required", tool.risk_level)
-            return ToolResult(
+            result_obj = ToolResult(
                 tool_name=tool_name,
                 success=True,
                 result={"message": "Awaiting human approval"},
@@ -326,11 +339,13 @@ Be concise and focus on the task at hand."""
                 simulated=simulated,
                 action_id=action_id,
             )
+            self._idempotency.set(idempotency_key, result_obj.__dict__)
+            return result_obj
 
         # For simulation, indicate it was simulation-only
         if simulated:
             record_outcome("simulated", tool.risk_level)
-            return ToolResult(
+            result_obj = ToolResult(
                 tool_name=tool_name,
                 success=True,
                 result=result,
@@ -338,6 +353,8 @@ Be concise and focus on the task at hand."""
                 status="simulated_only",
                 action_id=action_id,
             )
+            self._idempotency.set(idempotency_key, result_obj.__dict__)
+            return result_obj
 
         # Check for async job
         job_id = result.get("jobId") or result.get("job_id")
@@ -352,21 +369,60 @@ Be concise and focus on the task at hand."""
                 "success" if final_result.get("status") == "COMPLETED" else "error",
                 tool.risk_level,
             )
-            return ToolResult(
+            result_obj = ToolResult(
                 tool_name=tool_name,
                 success=final_result.get("status") == "COMPLETED",
                 result=final_result,
                 job_id=job_id,
                 action_id=action_id,
             )
+            self._idempotency.set(idempotency_key, result_obj.__dict__)
+            return result_obj
 
         record_outcome("success", tool.risk_level)
-        return ToolResult(
+        result_obj = ToolResult(
             tool_name=tool_name,
             success=True,
             result=result,
             action_id=action_id,
         )
+        self._idempotency.set(idempotency_key, result_obj.__dict__)
+        return result_obj
+
+    def _build_idempotency_key(self, tool_name: str, params: dict[str, Any]) -> str:
+        request_id = get_request_id()
+        payload = json.dumps(params, sort_keys=True, default=str)
+        payload_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        if request_id:
+            return f"{request_id}:{tool_name}:{payload_hash}"
+        return f"{tool_name}:{payload_hash}"
+
+    async def _invoke_with_retry(
+        self,
+        tool: ToolSpec,
+        params: dict[str, Any],
+        action_id: str,
+        invoke_fn,
+    ) -> dict[str, Any]:
+        attempts = max(1, self._settings.tool_retry_max_attempts)
+        delay = self._settings.tool_retry_base_delay
+        for attempt in range(1, attempts + 1):
+            try:
+                return await invoke_fn()
+            except Exception as exc:
+                if not self._is_retryable_error(exc) or attempt == attempts:
+                    raise
+                jitter = delay * self._settings.tool_retry_jitter
+                await asyncio.sleep(min(delay + random.uniform(-jitter, jitter), self._settings.tool_retry_max_delay))
+                delay = min(delay * 2, self._settings.tool_retry_max_delay)
+        return await invoke_fn()
+
+    def _is_retryable_error(self, exc: Exception) -> bool:
+        if isinstance(exc, TwinClientError):
+            if exc.status_code is None:
+                return True
+            return exc.status_code >= 500
+        return False
 
     async def _invoke_operation(
         self,
@@ -430,99 +486,100 @@ Be concise and focus on the task at hand."""
         Returns:
             Job status dictionary
         """
-        policy = await self._safety.load_policy()
-        start_time = time.time()
-        polls_without_update = 0
-        last_shadow_version: str | None = None
+        with span("job_monitor", {"job.id": job_id}):
+            policy = await self._safety.load_policy()
+            start_time = time.time()
+            polls_without_update = 0
+            last_shadow_version: str | None = None
 
-        while time.time() - start_time < self._settings.job_timeout:
-            # Get job status from shadow twin
-            job_status = await self._shadow.get_property_value(
-                policy.job_status_submodel_id,
-                policy.job_status_property_path,
-            )
+            while time.time() - start_time < self._settings.job_timeout:
+                # Get job status from shadow twin
+                job_status = await self._shadow.get_property_value(
+                    policy.job_status_submodel_id,
+                    policy.job_status_property_path,
+                )
 
-            if job_status:
-                if isinstance(job_status, str):
-                    try:
-                        job_status = json.loads(job_status)
-                    except json.JSONDecodeError:
-                        logger.warning("Invalid job status JSON payload", job_id=job_id)
-                        job_status = None
+                if job_status:
+                    if isinstance(job_status, str):
+                        try:
+                            job_status = json.loads(job_status)
+                        except json.JSONDecodeError:
+                            logger.warning("Invalid job status JSON payload", job_id=job_id)
+                            job_status = None
 
-                if not job_status:
-                    polls_without_update += 1
-                    await asyncio.sleep(self._settings.job_poll_interval)
-                    continue
+                    if not job_status:
+                        polls_without_update += 1
+                        await asyncio.sleep(self._settings.job_poll_interval)
+                        continue
 
-                # Track if shadow is updating
-                current_version = json.dumps(job_status, sort_keys=True)
-                if current_version == last_shadow_version:
-                    polls_without_update += 1
+                    # Track if shadow is updating
+                    current_version = json.dumps(job_status, sort_keys=True)
+                    if current_version == last_shadow_version:
+                        polls_without_update += 1
+                    else:
+                        polls_without_update = 0
+                        last_shadow_version = current_version
+
+                    jobs = job_status.get("jobs", [])
+                    for job in jobs:
+                        if job.get("job_id") == job_id:
+                            status = job.get("status", "")
+                            if status in ("COMPLETED", "FAILED", "CANCELLED"):
+                                record_job_result(status, "shadow")
+                                return job
                 else:
+                    polls_without_update += 1
+
+                # HTTP fallback: if shadow is stale and we have the context for HTTP polling
+                if (
+                    polls_without_update >= self._settings.job_http_fallback_polls
+                    and submodel_id is not None
+                    and operation_path is not None
+                ):
+                    logger.info(
+                        "Shadow twin stale, falling back to HTTP job polling",
+                        job_id=job_id,
+                        polls_without_update=polls_without_update,
+                    )
+                    try:
+                        http_status = await self._twin.get_job_status(
+                            submodel_id=submodel_id,
+                            operation_path=operation_path,
+                            job_id=job_id,
+                        )
+                        # Check if complete
+                        job_state = http_status.get("status") or http_status.get("executionState")
+                        if job_state in ("COMPLETED", "FINISHED", "FAILED", "CANCELLED"):
+                            record_job_result(job_state, "http")
+                            return {
+                                "job_id": job_id,
+                                "status": job_state,
+                                "result": http_status.get("outputArguments", http_status.get("result")),
+                                "source": "http_fallback",
+                            }
+                    except Exception as e:
+                        logger.warning(
+                            "HTTP job polling failed",
+                            job_id=job_id,
+                            error=str(e),
+                        )
+                    # Reset counter to avoid hammering HTTP endpoint
                     polls_without_update = 0
-                    last_shadow_version = current_version
 
-                jobs = job_status.get("jobs", [])
-                for job in jobs:
-                    if job.get("job_id") == job_id:
-                        status = job.get("status", "")
-                        if status in ("COMPLETED", "FAILED", "CANCELLED"):
-                            record_job_result(status, "shadow")
-                            return job
-            else:
-                polls_without_update += 1
-
-            # HTTP fallback: if shadow is stale and we have the context for HTTP polling
-            if (
-                polls_without_update >= self._settings.job_http_fallback_polls
-                and submodel_id is not None
-                and operation_path is not None
-            ):
-                logger.info(
-                    "Shadow twin stale, falling back to HTTP job polling",
-                    job_id=job_id,
-                    polls_without_update=polls_without_update,
-                )
-                try:
-                    http_status = await self._twin.get_job_status(
-                        submodel_id=submodel_id,
-                        operation_path=operation_path,
-                        job_id=job_id,
+                interval = self._settings.job_poll_interval
+                if polls_without_update:
+                    interval = min(
+                        interval * (1 + polls_without_update / 3),
+                        self._settings.job_poll_max_interval,
                     )
-                    # Check if complete
-                    job_state = http_status.get("status") or http_status.get("executionState")
-                    if job_state in ("COMPLETED", "FINISHED", "FAILED", "CANCELLED"):
-                        record_job_result(job_state, "http")
-                        return {
-                            "job_id": job_id,
-                            "status": job_state,
-                            "result": http_status.get("outputArguments", http_status.get("result")),
-                            "source": "http_fallback",
-                        }
-                except Exception as e:
-                    logger.warning(
-                        "HTTP job polling failed",
-                        job_id=job_id,
-                        error=str(e),
-                    )
-                # Reset counter to avoid hammering HTTP endpoint
-                polls_without_update = 0
+                    if self._settings.job_poll_jitter:
+                        jitter = interval * self._settings.job_poll_jitter
+                        interval = max(0.1, interval + random.uniform(-jitter, jitter))
 
-            interval = self._settings.job_poll_interval
-            if polls_without_update:
-                interval = min(
-                    interval * (1 + polls_without_update / 3),
-                    self._settings.job_poll_max_interval,
-                )
-                if self._settings.job_poll_jitter:
-                    jitter = interval * self._settings.job_poll_jitter
-                    interval = max(0.1, interval + random.uniform(-jitter, jitter))
+                await asyncio.sleep(interval)
 
-            await asyncio.sleep(interval)
-
-        record_job_result("TIMEOUT", "shadow")
-        return {"job_id": job_id, "status": "TIMEOUT"}
+            record_job_result("TIMEOUT", "shadow")
+            return {"job_id": job_id, "status": "TIMEOUT"}
 
     def _build_reply(
         self,
