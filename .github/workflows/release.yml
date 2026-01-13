@@ -85,12 +85,7 @@ jobs:
           name: python-package
           path: dist/
 
-      - name: Publish to PyPI (trusted publishing)
-        uses: pypa/gh-action-pypi-publish@release/v1
-        if: ${{ !secrets.PYPI_API_TOKEN }}
-
-      - name: Publish to PyPI (API token)
-        if: ${{ secrets.PYPI_API_TOKEN }}
+      - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
