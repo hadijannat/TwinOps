@@ -106,14 +106,9 @@ jobs:
 
     services:
       mosquitto:
-        image: eclipse-mosquitto:2
+        image: eclipse-mosquitto:2.0.18
         ports:
           - 1883:1883
-        options: >-
-          --health-cmd "mosquitto_sub -h localhost -t '$$SYS/#' -C 1 -i healthcheck -W 3 || exit 1"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
 
     steps:
       - uses: actions/checkout@v6
@@ -127,6 +122,15 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
+
+      - name: Wait for MQTT broker
+        run: |
+          for i in {1..30}; do
+            nc -z localhost 1883 && exit 0
+            sleep 2
+          done
+          docker logs "${{ job.services.mosquitto.id }}"
+          exit 1
 
       - name: Run tests with coverage
         run: |
