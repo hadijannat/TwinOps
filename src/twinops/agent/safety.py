@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -99,7 +98,7 @@ class AuditLogger:
 
         # Load previous hash if log exists
         if self._log_path.exists():
-            with open(self._log_path, "r") as f:
+            with open(self._log_path) as f:
                 for line in f:
                     try:
                         entry = json.loads(line)
@@ -161,7 +160,7 @@ class AuditLogger:
         with open(self._log_path, "a") as f:
             f.write(json.dumps(entry) + "\n")
 
-        logger.debug("Audit entry logged", event=event, tool=tool)
+        logger.debug("Audit entry logged", audit_event=event, tool=tool)
 
     def verify_chain(self) -> tuple[bool, list[int]]:
         """
@@ -176,7 +175,7 @@ class AuditLogger:
         if not self._log_path.exists():
             return True, []
 
-        with open(self._log_path, "r") as f:
+        with open(self._log_path) as f:
             for i, line in enumerate(f, 1):
                 try:
                     entry = json.loads(line)
@@ -225,6 +224,7 @@ class SafetyKernel:
         audit_logger: AuditLogger,
         policy_submodel_id: str,
         require_policy_verification: bool = True,
+        interlock_fail_safe: bool = True,
     ):
         """
         Initialize safety kernel.
@@ -235,12 +235,14 @@ class SafetyKernel:
             audit_logger: Audit log writer
             policy_submodel_id: ID of PolicyTwin submodel
             require_policy_verification: Whether to require signed policies
+            interlock_fail_safe: If True, deny when interlock property missing (fail-safe)
         """
         self._shadow = shadow
         self._twin_client = twin_client
         self._audit = audit_logger
         self._policy_submodel_id = policy_submodel_id
         self._require_verification = require_policy_verification
+        self._interlock_fail_safe = interlock_fail_safe
         self._cached_policy: PolicyConfig | None = None
         self._policy_load_time: float = 0
 
@@ -299,10 +301,7 @@ class SafetyKernel:
             for elem in submodel.get("submodelElements", []):
                 if elem.get("idShort") == "PolicyJson":
                     value = elem.get("value", "{}")
-                    if isinstance(value, str):
-                        policy_dict = json.loads(value)
-                    else:
-                        policy_dict = value
+                    policy_dict = json.loads(value) if isinstance(value, str) else value
                     config = PolicyConfig.from_dict(policy_dict)
                     config.is_verified = False
                     self._cached_policy = config
@@ -427,16 +426,40 @@ class SafetyKernel:
             path = deny_when.get("path")
             op = deny_when.get("op")
             threshold = deny_when.get("value")
+            interlock_id = rule.get("id", "unknown")
 
             if not all([submodel_id, path, op]):
+                logger.warning(
+                    "Interlock rule has missing configuration",
+                    interlock_id=interlock_id,
+                    submodel_id=submodel_id,
+                    path=path,
+                    op=op,
+                )
                 continue
 
             current = await self._shadow.get_property_value(submodel_id, path)
             if current is None:
+                # SAFETY: Missing interlock property is a critical condition
+                logger.warning(
+                    "Interlock property not found in shadow state",
+                    interlock_id=interlock_id,
+                    submodel_id=submodel_id,
+                    path=path,
+                    fail_safe=self._interlock_fail_safe,
+                )
+                if self._interlock_fail_safe:
+                    # Fail-safe: Deny operation when interlock state is unknown
+                    return (
+                        f"Safety interlock {interlock_id} cannot be evaluated: "
+                        f"property {path} not found in submodel {submodel_id}. "
+                        f"Operation denied for safety (fail-safe mode)."
+                    )
+                # Fail-open: Log warning but continue (not recommended for production)
                 continue
 
             if self._violates(current, op, threshold):
-                return rule.get("message", f"Interlock {rule.get('id')} violated")
+                return rule.get("message", f"Interlock {interlock_id} violated")
 
         return None
 
@@ -562,6 +585,164 @@ class SafetyKernel:
                 return TaskStatus(task.get("status", TaskStatus.PENDING_APPROVAL.value))
 
         return TaskStatus.EXPIRED
+
+    async def get_pending_tasks(self) -> list[dict[str, Any]]:
+        """
+        Get all pending approval tasks.
+
+        Returns:
+            List of pending tasks
+        """
+        config = await self.load_policy()
+        tasks = await self._twin_client.get_tasks(
+            config.task_submodel_id,
+            config.tasks_property_path,
+        )
+        return [
+            task for task in tasks
+            if task.get("status") == TaskStatus.PENDING_APPROVAL.value
+        ]
+
+    async def get_task(self, task_id: str) -> dict[str, Any] | None:
+        """
+        Get a specific task by ID.
+
+        Args:
+            task_id: Task identifier
+
+        Returns:
+            Task details or None if not found
+        """
+        config = await self.load_policy()
+        tasks = await self._twin_client.get_tasks(
+            config.task_submodel_id,
+            config.tasks_property_path,
+        )
+
+        for task in tasks:
+            if task.get("task_id") == task_id:
+                return task
+
+        return None
+
+    async def get_all_tasks(self) -> list[dict[str, Any]]:
+        """
+        Get all tasks (pending, approved, rejected).
+
+        Returns:
+            List of all tasks
+        """
+        config = await self.load_policy()
+        return await self._twin_client.get_tasks(
+            config.task_submodel_id,
+            config.tasks_property_path,
+        )
+
+    async def approve_task(self, task_id: str, approver: str = "unknown") -> bool:
+        """
+        Approve a pending task.
+
+        Args:
+            task_id: Task identifier
+            approver: Identity of the approver
+
+        Returns:
+            True if task was approved, False if not found or not pending
+        """
+        config = await self.load_policy()
+        tasks = await self._twin_client.get_tasks(
+            config.task_submodel_id,
+            config.tasks_property_path,
+        )
+
+        for task in tasks:
+            if task.get("task_id") == task_id:
+                if task.get("status") != TaskStatus.PENDING_APPROVAL.value:
+                    logger.warning(
+                        "Cannot approve task - not in pending state",
+                        task_id=task_id,
+                        current_status=task.get("status"),
+                    )
+                    return False
+
+                task["status"] = TaskStatus.APPROVED.value
+                task["approved_by"] = approver
+                task["approved_at"] = time.time()
+
+                await self._twin_client.update_tasks(
+                    config.task_submodel_id,
+                    config.tasks_property_path,
+                    tasks,
+                )
+
+                self._audit.log(
+                    event="approved",
+                    task_id=task_id,
+                    approved_by=approver,
+                )
+                logger.info("Task approved", task_id=task_id, approved_by=approver)
+                return True
+
+        logger.warning("Task not found for approval", task_id=task_id)
+        return False
+
+    async def reject_task(
+        self, task_id: str, rejector: str = "unknown", reason: str = ""
+    ) -> bool:
+        """
+        Reject a pending task.
+
+        Args:
+            task_id: Task identifier
+            rejector: Identity of the rejector
+            reason: Reason for rejection
+
+        Returns:
+            True if task was rejected, False if not found or not pending
+        """
+        config = await self.load_policy()
+        tasks = await self._twin_client.get_tasks(
+            config.task_submodel_id,
+            config.tasks_property_path,
+        )
+
+        for task in tasks:
+            if task.get("task_id") == task_id:
+                if task.get("status") != TaskStatus.PENDING_APPROVAL.value:
+                    logger.warning(
+                        "Cannot reject task - not in pending state",
+                        task_id=task_id,
+                        current_status=task.get("status"),
+                    )
+                    return False
+
+                task["status"] = TaskStatus.REJECTED.value
+                task["rejected_by"] = rejector
+                task["rejected_at"] = time.time()
+                task["rejection_reason"] = reason
+
+                await self._twin_client.update_tasks(
+                    config.task_submodel_id,
+                    config.tasks_property_path,
+                    tasks,
+                )
+
+                self._audit.log(
+                    event="rejected",
+                    task_id=task_id,
+                    rejected_by=rejector,
+                    reason=reason,
+                )
+                logger.info(
+                    "Task rejected",
+                    task_id=task_id,
+                    rejected_by=rejector,
+                    reason=reason,
+                )
+                return True
+
+        logger.warning("Task not found for rejection", task_id=task_id)
+        return False
 
     async def wait_for_approval(
         self,

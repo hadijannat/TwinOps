@@ -5,6 +5,8 @@ import json
 import signal
 import time
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from enum import Enum
 
 import uvicorn
 from starlette.applications import Starlette
@@ -18,7 +20,7 @@ from twinops.agent.orchestrator import AgentOrchestrator
 from twinops.agent.safety import AuditLogger, SafetyKernel
 from twinops.agent.schema_gen import generate_all_tool_schemas
 from twinops.agent.shadow import ShadowTwinManager
-from twinops.agent.twin_client import TwinClient
+from twinops.agent.twin_client import TwinClient, TwinClientError
 from twinops.common.logging import get_logger, setup_logging
 from twinops.common.metrics import metrics_endpoint
 from twinops.common.mqtt import MqttClient
@@ -26,6 +28,35 @@ from twinops.common.ratelimit import RateLimitMiddleware
 from twinops.common.settings import Settings, get_settings
 
 logger = get_logger(__name__)
+
+
+class DependencyStatus(str, Enum):
+    """Status of a dependency check."""
+
+    OK = "ok"
+    UNAVAILABLE = "unavailable"
+    NOT_FOUND = "not_found"
+    ERROR = "error"
+
+
+@dataclass
+class DependencyCheck:
+    """Result of a dependency validation check."""
+
+    name: str
+    status: DependencyStatus
+    message: str
+    details: dict | None = None
+
+
+class StartupValidationError(Exception):
+    """Raised when startup validation fails."""
+
+    def __init__(self, checks: list[DependencyCheck]):
+        self.checks = checks
+        failed = [c for c in checks if c.status != DependencyStatus.OK]
+        messages = [f"{c.name}: {c.message}" for c in failed]
+        super().__init__(f"Startup validation failed: {'; '.join(messages)}")
 
 
 class GracefulShutdown:
@@ -108,14 +139,134 @@ class AgentServer:
         self._initialized = False
         self._start_time = time.time()
 
-    async def startup(self) -> None:
-        """Initialize all components."""
-        logger.info("Starting agent server...")
+    async def _validate_dependencies(self) -> list[DependencyCheck]:
+        """
+        Validate all dependencies are available before full startup.
 
-        # Create clients
+        Returns:
+            List of dependency check results
+        """
+        checks: list[DependencyCheck] = []
+
+        # Check AAS Repository
+        try:
+            aas_list = await self._twin_client.get_all_aas()
+            checks.append(DependencyCheck(
+                name="aas_repository",
+                status=DependencyStatus.OK,
+                message=f"Connected, {len(aas_list)} AAS available",
+                details={"aas_count": len(aas_list)},
+            ))
+
+            # Check if configured AAS exists
+            if self._settings.startup_validate_aas:
+                aas_ids = [aas.get("id", "") for aas in aas_list]
+                if self._settings.aas_id in aas_ids:
+                    checks.append(DependencyCheck(
+                        name="configured_aas",
+                        status=DependencyStatus.OK,
+                        message=f"AAS '{self._settings.aas_id}' found",
+                    ))
+                else:
+                    checks.append(DependencyCheck(
+                        name="configured_aas",
+                        status=DependencyStatus.NOT_FOUND,
+                        message=f"AAS '{self._settings.aas_id}' not found in repository",
+                        details={"available_aas": aas_ids[:10]},  # Limit for logging
+                    ))
+
+        except TwinClientError as e:
+            checks.append(DependencyCheck(
+                name="aas_repository",
+                status=DependencyStatus.UNAVAILABLE,
+                message=f"Cannot connect to AAS repository: {e}",
+                details={"url": self._settings.twin_base_url},
+            ))
+        except Exception as e:
+            checks.append(DependencyCheck(
+                name="aas_repository",
+                status=DependencyStatus.ERROR,
+                message=f"Unexpected error: {e}",
+            ))
+
+        return checks
+
+    async def _wait_for_dependencies(self) -> None:
+        """
+        Wait for dependencies with retry logic.
+
+        Raises:
+            StartupValidationError: If dependencies don't become available within timeout
+        """
+        start_time = time.time()
+        last_checks: list[DependencyCheck] = []
+
+        while time.time() - start_time < self._settings.startup_timeout:
+            last_checks = await self._validate_dependencies()
+
+            # Check if all critical dependencies are OK
+            critical_failed = [
+                c for c in last_checks
+                if c.status != DependencyStatus.OK
+                and c.name in ("aas_repository", "configured_aas")
+            ]
+
+            if not critical_failed:
+                # All critical dependencies OK
+                for check in last_checks:
+                    logger.info(
+                        "Dependency check passed",
+                        dependency=check.name,
+                        status=check.status.value,
+                        message=check.message,
+                    )
+                return
+
+            # Log retry
+            elapsed = time.time() - start_time
+            remaining = self._settings.startup_timeout - elapsed
+            logger.warning(
+                "Dependencies not ready, retrying...",
+                failed_checks=[c.name for c in critical_failed],
+                elapsed=round(elapsed, 1),
+                remaining=round(remaining, 1),
+                retry_interval=self._settings.startup_retry_interval,
+            )
+
+            await asyncio.sleep(self._settings.startup_retry_interval)
+
+        # Timeout reached
+        raise StartupValidationError(last_checks)
+
+    async def startup(self) -> None:
+        """Initialize all components with dependency validation."""
+        logger.info(
+            "Starting agent server...",
+            aas_id=self._settings.aas_id,
+            twin_url=self._settings.twin_base_url,
+            mqtt_host=self._settings.mqtt_broker_host,
+        )
+
+        # Create twin client first (needed for validation)
         self._twin_client = TwinClient(self._settings)
         await self._twin_client.__aenter__()
 
+        # Validate dependencies before proceeding
+        try:
+            await self._wait_for_dependencies()
+        except StartupValidationError as e:
+            logger.error(
+                "Startup validation failed",
+                failed_checks=[
+                    {"name": c.name, "status": c.status.value, "message": c.message}
+                    for c in e.checks if c.status != DependencyStatus.OK
+                ],
+            )
+            # Clean up twin client
+            await self._twin_client.__aexit__(None, None, None)
+            raise
+
+        # Create MQTT client
         self._mqtt_client = MqttClient(
             host=self._settings.mqtt_broker_host,
             port=self._settings.mqtt_broker_port,
@@ -141,7 +292,7 @@ class AgentServer:
             tools = generate_all_tool_schemas(operations)
             capabilities = CapabilityIndex(tools)
 
-            logger.info("Loaded tools", count=len(tools))
+            logger.info("Loaded tools from AAS", count=len(tools))
 
             # Create safety kernel
             audit = AuditLogger(self._settings.audit_log_path)
@@ -149,8 +300,9 @@ class AgentServer:
                 shadow=self._shadow,
                 twin_client=self._twin_client,
                 audit_logger=audit,
-                policy_submodel_id="urn:example:submodel:policy",  # TODO: from settings
+                policy_submodel_id=self._settings.policy_submodel_id,
                 require_policy_verification=self._settings.policy_verification_required,
+                interlock_fail_safe=self._settings.interlock_fail_safe,
             )
 
             # Create LLM client
@@ -167,7 +319,11 @@ class AgentServer:
             )
 
             self._initialized = True
-            logger.info("Agent server ready")
+            logger.info(
+                "Agent server ready",
+                tools_loaded=len(tools),
+                aas_id=self._settings.aas_id,
+            )
 
     async def shutdown(self) -> None:
         """Clean up resources with graceful draining."""
@@ -292,7 +448,223 @@ class AgentServer:
         """Reset conversation history."""
         if self._orchestrator:
             self._orchestrator.reset_conversation()
-        return JSONResponse({"status": "conversation reset"})
+        return JSONResponse({"status": "ok"})
+
+    async def handle_list_tasks(self, _request: Request) -> JSONResponse:
+        """
+        List pending approval tasks.
+
+        Returns list of tasks awaiting human approval.
+        """
+        if not self._safety:
+            return JSONResponse(
+                {"error": "Server not initialized"},
+                status_code=503,
+            )
+
+        try:
+            tasks = await self._safety.get_pending_tasks()
+            return JSONResponse({
+                "tasks": tasks,
+                "count": len(tasks),
+            })
+        except Exception as e:
+            logger.error("Failed to list tasks", error=str(e))
+            return JSONResponse(
+                {"error": "Failed to retrieve tasks"},
+                status_code=500,
+            )
+
+    async def handle_approve_task(self, request: Request) -> JSONResponse:
+        """
+        Approve a pending task.
+
+        Requires task_id in URL path. Optionally accepts approver in body.
+        """
+        if not self._safety:
+            return JSONResponse(
+                {"error": "Server not initialized"},
+                status_code=503,
+            )
+
+        task_id = request.path_params.get("task_id", "")
+        if not task_id:
+            return JSONResponse(
+                {"error": "Missing task_id"},
+                status_code=400,
+            )
+
+        # Get approver identity from request body or header
+        approver = "unknown"
+        try:
+            body = await request.json()
+            approver = body.get("approver", approver)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        # Try to get from header
+        approver = request.headers.get("X-Approver", approver)
+
+        try:
+            success = await self._safety.approve_task(task_id, approver)
+            if success:
+                return JSONResponse({
+                    "status": "approved",
+                    "task_id": task_id,
+                    "approved_by": approver,
+                })
+            else:
+                return JSONResponse(
+                    {"error": "Task not found or not in pending state"},
+                    status_code=404,
+                )
+        except Exception as e:
+            logger.error("Failed to approve task", task_id=task_id, error=str(e))
+            return JSONResponse(
+                {"error": "Failed to approve task"},
+                status_code=500,
+            )
+
+    async def handle_reject_task(self, request: Request) -> JSONResponse:
+        """
+        Reject a pending task.
+
+        Requires task_id in URL path. Optionally accepts rejector and reason in body.
+        """
+        if not self._safety:
+            return JSONResponse(
+                {"error": "Server not initialized"},
+                status_code=503,
+            )
+
+        task_id = request.path_params.get("task_id", "")
+        if not task_id:
+            return JSONResponse(
+                {"error": "Missing task_id"},
+                status_code=400,
+            )
+
+        # Get rejector identity and reason from request body
+        rejector = "unknown"
+        reason = ""
+        try:
+            body = await request.json()
+            rejector = body.get("rejector", rejector)
+            reason = body.get("reason", reason)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        # Try to get from header
+        rejector = request.headers.get("X-Rejector", rejector)
+
+        try:
+            success = await self._safety.reject_task(task_id, rejector, reason)
+            if success:
+                return JSONResponse({
+                    "status": "rejected",
+                    "task_id": task_id,
+                    "rejected_by": rejector,
+                    "reason": reason,
+                })
+            else:
+                return JSONResponse(
+                    {"error": "Task not found or not in pending state"},
+                    status_code=404,
+                )
+        except Exception as e:
+            logger.error("Failed to reject task", task_id=task_id, error=str(e))
+            return JSONResponse(
+                {"error": "Failed to reject task"},
+                status_code=500,
+            )
+
+    async def handle_get_task(self, request: Request) -> JSONResponse:
+        """
+        Get details of a specific task.
+
+        Returns full task information including status, tool, args, etc.
+        """
+        if not self._safety:
+            return JSONResponse(
+                {"error": "Server not initialized"},
+                status_code=503,
+            )
+
+        task_id = request.path_params.get("task_id", "")
+        if not task_id:
+            return JSONResponse(
+                {"error": "Missing task_id"},
+                status_code=400,
+            )
+
+        try:
+            task = await self._safety.get_task(task_id)
+            if task:
+                return JSONResponse({"task": task})
+            else:
+                return JSONResponse(
+                    {"error": "Task not found"},
+                    status_code=404,
+                )
+        except Exception as e:
+            logger.error("Failed to get task", task_id=task_id, error=str(e))
+            return JSONResponse(
+                {"error": "Failed to retrieve task"},
+                status_code=500,
+            )
+
+    async def handle_execute_task(self, request: Request) -> JSONResponse:
+        """
+        Execute an approved task.
+
+        This endpoint allows executing a task that has been approved.
+        Useful for executing tasks after agent restart or asynchronous approval.
+        """
+        if not self._orchestrator:
+            return JSONResponse(
+                {"error": "Server not initialized"},
+                status_code=503,
+            )
+
+        task_id = request.path_params.get("task_id", "")
+        if not task_id:
+            return JSONResponse(
+                {"error": "Missing task_id"},
+                status_code=400,
+            )
+
+        # Extract roles from header
+        roles_header = request.headers.get("X-Roles", "")
+        roles = tuple(r.strip() for r in roles_header.split(",") if r.strip())
+        if not roles:
+            roles = self._settings.default_roles
+
+        self._shutdown.request_started()
+        try:
+            response = await self._orchestrator.execute_approved_task(task_id, roles)
+
+            return JSONResponse({
+                "reply": response.reply,
+                "tool_results": [
+                    {
+                        "tool": r.tool_name,
+                        "success": r.success,
+                        "result": r.result,
+                        "error": r.error,
+                        "job_id": r.job_id,
+                        "status": r.status,
+                    }
+                    for r in response.tool_results
+                ],
+            })
+        except Exception as e:
+            logger.error("Failed to execute task", task_id=task_id, error=str(e))
+            return JSONResponse(
+                {"error": "Failed to execute task"},
+                status_code=500,
+            )
+        finally:
+            self._shutdown.request_finished()
 
     async def handle_openapi(self, _request: Request) -> JSONResponse:
         """
@@ -469,6 +841,166 @@ class AgentServer:
                         },
                     }
                 },
+                "/tasks": {
+                    "get": {
+                        "summary": "List pending approval tasks",
+                        "description": "Get all tasks awaiting human approval.",
+                        "operationId": "listTasks",
+                        "tags": ["Approval"],
+                        "responses": {
+                            "200": {
+                                "description": "List of pending tasks",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "tasks": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                            "task_id": {"type": "string"},
+                                                            "tool": {"type": "string"},
+                                                            "risk": {"type": "string"},
+                                                            "status": {"type": "string"},
+                                                            "created_at": {"type": "number"},
+                                                        },
+                                                    },
+                                                },
+                                                "count": {"type": "integer"},
+                                            },
+                                        }
+                                    }
+                                },
+                            },
+                            "503": {"description": "Service unavailable"},
+                        },
+                    }
+                },
+                "/tasks/{task_id}/approve": {
+                    "post": {
+                        "summary": "Approve a pending task",
+                        "description": "Approve a task awaiting human approval, allowing it to proceed.",
+                        "operationId": "approveTask",
+                        "tags": ["Approval"],
+                        "parameters": [
+                            {
+                                "name": "task_id",
+                                "in": "path",
+                                "description": "Task identifier",
+                                "required": True,
+                                "schema": {"type": "string"},
+                            },
+                            {
+                                "name": "X-Approver",
+                                "in": "header",
+                                "description": "Identity of the approver",
+                                "required": False,
+                                "schema": {"type": "string"},
+                            },
+                        ],
+                        "requestBody": {
+                            "required": False,
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "approver": {
+                                                "type": "string",
+                                                "description": "Identity of the approver",
+                                            }
+                                        },
+                                    }
+                                }
+                            },
+                        },
+                        "responses": {
+                            "200": {
+                                "description": "Task approved",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "status": {"type": "string"},
+                                                "task_id": {"type": "string"},
+                                                "approved_by": {"type": "string"},
+                                            },
+                                        }
+                                    }
+                                },
+                            },
+                            "404": {"description": "Task not found or not pending"},
+                            "503": {"description": "Service unavailable"},
+                        },
+                    }
+                },
+                "/tasks/{task_id}/reject": {
+                    "post": {
+                        "summary": "Reject a pending task",
+                        "description": "Reject a task awaiting human approval, preventing it from proceeding.",
+                        "operationId": "rejectTask",
+                        "tags": ["Approval"],
+                        "parameters": [
+                            {
+                                "name": "task_id",
+                                "in": "path",
+                                "description": "Task identifier",
+                                "required": True,
+                                "schema": {"type": "string"},
+                            },
+                            {
+                                "name": "X-Rejector",
+                                "in": "header",
+                                "description": "Identity of the rejector",
+                                "required": False,
+                                "schema": {"type": "string"},
+                            },
+                        ],
+                        "requestBody": {
+                            "required": False,
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "rejector": {
+                                                "type": "string",
+                                                "description": "Identity of the rejector",
+                                            },
+                                            "reason": {
+                                                "type": "string",
+                                                "description": "Reason for rejection",
+                                            },
+                                        },
+                                    }
+                                }
+                            },
+                        },
+                        "responses": {
+                            "200": {
+                                "description": "Task rejected",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "status": {"type": "string"},
+                                                "task_id": {"type": "string"},
+                                                "rejected_by": {"type": "string"},
+                                                "reason": {"type": "string"},
+                                            },
+                                        }
+                                    }
+                                },
+                            },
+                            "404": {"description": "Task not found or not pending"},
+                            "503": {"description": "Service unavailable"},
+                        },
+                    }
+                },
                 "/metrics": {
                     "get": {
                         "summary": "Prometheus metrics",
@@ -490,6 +1022,7 @@ class AgentServer:
             },
             "tags": [
                 {"name": "Agent", "description": "AI agent operations"},
+                {"name": "Approval", "description": "Human-in-the-loop approval workflow"},
                 {"name": "Health", "description": "Health and readiness probes"},
                 {"name": "Observability", "description": "Monitoring and metrics"},
             ],
@@ -523,6 +1056,11 @@ def create_app(settings: Settings | None = None) -> Starlette:
         Route("/health", server.handle_health, methods=["GET"]),
         Route("/ready", server.handle_ready, methods=["GET"]),
         Route("/reset", server.handle_reset, methods=["POST"]),
+        Route("/tasks", server.handle_list_tasks, methods=["GET"]),
+        Route("/tasks/{task_id}", server.handle_get_task, methods=["GET"]),
+        Route("/tasks/{task_id}/approve", server.handle_approve_task, methods=["POST"]),
+        Route("/tasks/{task_id}/reject", server.handle_reject_task, methods=["POST"]),
+        Route("/tasks/{task_id}/execute", server.handle_execute_task, methods=["POST"]),
         Route("/metrics", metrics_endpoint, methods=["GET"]),
         Route("/openapi.json", server.handle_openapi, methods=["GET"]),
     ]

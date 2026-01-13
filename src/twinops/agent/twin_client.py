@@ -604,3 +604,23 @@ class TwinClient:
             property_path,
             json.dumps({"tasks": tasks}),
         )
+
+    async def update_tasks(
+        self,
+        submodel_id: str,
+        property_path: str,
+        tasks: list[dict[str, Any]],
+    ) -> None:
+        """
+        Replace all tasks in TasksJson.
+
+        Args:
+            submodel_id: Submodel containing tasks
+            property_path: Path to TasksJson property
+            tasks: Complete list of tasks to store
+        """
+        await self.set_property_value(
+            submodel_id,
+            property_path,
+            json.dumps({"tasks": tasks}),
+        )

@@ -7,11 +7,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from twinops.agent.capabilities import CapabilityIndex
-from twinops.agent.llm.base import LlmClient, LlmResponse, Message
-from twinops.agent.safety import SafetyKernel, SafetyDecision
+from twinops.agent.llm.base import LlmClient, Message
+from twinops.agent.safety import SafetyKernel
 from twinops.agent.schema_gen import ToolSpec, tool_spec_to_llm_format
 from twinops.agent.shadow import ShadowTwinManager
-from twinops.agent.twin_client import TwinClient, TwinClientError
+from twinops.agent.twin_client import TwinClient
 from twinops.common.logging import get_logger
 from twinops.common.settings import Settings
 
@@ -371,6 +371,147 @@ Be concise and focus on the task at hand."""
             return AgentResponse(
                 reply=f"Task {task_id} was not approved: {reason}",
             )
+
+    async def execute_approved_task(
+        self,
+        task_id: str,
+        roles: tuple[str, ...],
+    ) -> AgentResponse:
+        """
+        Execute a previously approved task.
+
+        This allows executing operations after agent restart or when
+        the approval happened asynchronously.
+
+        Args:
+            task_id: Task identifier
+            roles: Roles of the user executing the task
+
+        Returns:
+            AgentResponse with execution result
+        """
+        from twinops.agent.safety import TaskStatus
+
+        # Get the task
+        task = await self._safety.get_task(task_id)
+        if not task:
+            return AgentResponse(
+                reply=f"Task {task_id} not found.",
+                tool_results=[ToolResult(
+                    tool_name="execute_task",
+                    success=False,
+                    error=f"Task {task_id} not found",
+                )],
+            )
+
+        # Check task status
+        status = task.get("status")
+        if status != TaskStatus.APPROVED.value:
+            return AgentResponse(
+                reply=f"Task {task_id} cannot be executed. Status: {status}",
+                tool_results=[ToolResult(
+                    tool_name="execute_task",
+                    success=False,
+                    error=f"Task status is {status}, expected Approved",
+                )],
+            )
+
+        # Extract task details
+        tool_name = task.get("tool", "")
+        params = task.get("args", {})
+
+        # Find the tool
+        tools = self._capabilities.search(tool_name, k=1)
+        if not tools:
+            return AgentResponse(
+                reply=f"Tool '{tool_name}' from task {task_id} not found.",
+                tool_results=[ToolResult(
+                    tool_name=tool_name,
+                    success=False,
+                    error=f"Tool not found: {tool_name}",
+                )],
+            )
+
+        tool = tools[0]
+
+        # Verify roles (use original requesting roles or current roles)
+        original_roles = tuple(task.get("requested_by_roles", []))
+        if not self._check_rbac(tool_name, original_roles, roles):
+            return AgentResponse(
+                reply=f"Roles {roles} not authorized to execute task {task_id}.",
+                tool_results=[ToolResult(
+                    tool_name=tool_name,
+                    success=False,
+                    error=f"Unauthorized: roles {roles}",
+                )],
+            )
+
+        # Execute the tool (skip approval check since already approved)
+        logger.info(
+            "Executing approved task",
+            task_id=task_id,
+            tool=tool_name,
+            roles=roles,
+        )
+
+        try:
+            result = await self._twin.invoke_operation(
+                submodel_id=tool.submodel_id,
+                operation_path=tool.operation_path,
+                input_arguments=self._build_input_arguments(tool, params),
+                async_mode=True,
+            )
+
+            # Log execution
+            self._safety.log_execution(
+                tool_name=tool_name,
+                risk=tool.risk_level,
+                roles=roles,
+                result=result,
+                simulated=False,
+            )
+
+            return AgentResponse(
+                reply=f"Task {task_id} executed successfully.",
+                tool_results=[ToolResult(
+                    tool_name=tool_name,
+                    success=True,
+                    result=result,
+                    job_id=result.get("jobId"),
+                    status="completed",
+                )],
+            )
+
+        except Exception as e:
+            self._safety.log_error(tool_name, roles, str(e))
+            return AgentResponse(
+                reply=f"Task {task_id} execution failed: {e}",
+                tool_results=[ToolResult(
+                    tool_name=tool_name,
+                    success=False,
+                    error=str(e),
+                )],
+            )
+
+    def _check_rbac(
+        self,
+        _tool_name: str,
+        original_roles: tuple[str, ...],
+        current_roles: tuple[str, ...],
+    ) -> bool:
+        """
+        Check if current roles can execute on behalf of original roles.
+
+        For now, allows execution if current roles include any original role
+        or if current roles include 'admin' or 'maintenance'.
+        """
+        # Admin/maintenance can execute any approved task
+        privileged = {"admin", "maintenance", "supervisor"}
+        if privileged & set(current_roles):
+            return True
+
+        # Original requester can execute their own approved task
+        return bool(set(original_roles) & set(current_roles))
 
     def reset_conversation(self) -> None:
         """Clear conversation history."""
