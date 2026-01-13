@@ -15,6 +15,7 @@ from starlette.routing import Route
 import uvicorn
 
 from twinops.common.auth import AuthMiddleware
+from twinops.common.http import RequestIdMiddleware
 from twinops.common.basyx_topics import b64url_decode_nopad, b64url_encode_nopad
 from twinops.common.logging import get_logger, setup_logging
 from twinops.common.metrics import MetricsMiddleware, metrics_endpoint
@@ -261,6 +262,12 @@ class SandboxServer:
             host=self._settings.mqtt_broker_host,
             port=self._settings.mqtt_broker_port,
             client_id="sandbox-publisher",
+            username=self._settings.mqtt_username,
+            password=self._settings.mqtt_password,
+            tls=self._settings.mqtt_tls_enabled,
+            tls_ca_cert=self._settings.mqtt_tls_ca_cert,
+            tls_client_cert=self._settings.mqtt_tls_client_cert,
+            tls_client_key=self._settings.mqtt_tls_client_key,
         )
 
         # Create repository
@@ -384,6 +391,7 @@ def create_app(settings: Settings | None = None) -> Starlette:
         requests_per_minute=settings.rate_limit_rpm,
         exclude_paths=["/health", "/metrics"],
     )
+    app.add_middleware(RequestIdMiddleware)
     app.add_middleware(AuthMiddleware, settings=settings)
     app.add_middleware(
         MetricsMiddleware,

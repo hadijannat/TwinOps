@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Self
 
 import aiomqtt
+import ssl
 
 from twinops.common.basyx_topics import TopicSubscription
 from twinops.common.logging import get_logger
@@ -85,6 +86,10 @@ class MqttClient:
         client_id: str = "twinops",
         username: str | None = None,
         password: str | None = None,
+        tls: bool = False,
+        tls_ca_cert: str | None = None,
+        tls_client_cert: str | None = None,
+        tls_client_key: str | None = None,
         base_reconnect_delay: float = 5.0,
         max_reconnect_delay: float = 60.0,
     ):
@@ -105,6 +110,10 @@ class MqttClient:
         self._client_id = client_id
         self._username = username
         self._password = password
+        self._tls = tls
+        self._tls_ca_cert = tls_ca_cert
+        self._tls_client_cert = tls_client_cert
+        self._tls_client_key = tls_client_key
         self._backoff = ExponentialBackoff(
             base_delay=base_reconnect_delay,
             max_delay=max_reconnect_delay,
@@ -209,12 +218,19 @@ class MqttClient:
             client_id=self._client_id,
         )
 
+        tls_context = None
+        if self._tls:
+            tls_context = ssl.create_default_context(cafile=self._tls_ca_cert)
+            if self._tls_client_cert and self._tls_client_key:
+                tls_context.load_cert_chain(self._tls_client_cert, self._tls_client_key)
+
         async with aiomqtt.Client(
             hostname=self._host,
             port=self._port,
             identifier=self._client_id,
             username=self._username,
             password=self._password,
+            tls_context=tls_context,
         ) as client:
             # Mark as connected and reset backoff
             self._connected = True
@@ -280,11 +296,18 @@ class MqttClient:
         Note: This creates a new connection for publishing.
         For frequent publishing, consider maintaining a persistent connection.
         """
+        tls_context = None
+        if self._tls:
+            tls_context = ssl.create_default_context(cafile=self._tls_ca_cert)
+            if self._tls_client_cert and self._tls_client_key:
+                tls_context.load_cert_chain(self._tls_client_cert, self._tls_client_key)
+
         async with aiomqtt.Client(
             hostname=self._host,
             port=self._port,
             identifier=f"{self._client_id}-pub",
             username=self._username,
             password=self._password,
+            tls_context=tls_context,
         ) as client:
             await client.publish(topic, payload, qos=qos, retain=retain)

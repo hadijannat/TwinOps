@@ -64,6 +64,44 @@ class Settings(BaseSettings):
         default=None,
         description="MQTT password (optional)",
     )
+    mqtt_tls_enabled: bool = Field(
+        default=False,
+        description="Enable TLS for MQTT connections",
+    )
+    mqtt_tls_ca_cert: str | None = Field(
+        default=None,
+        description="Path to CA certificate for MQTT TLS",
+    )
+    mqtt_tls_client_cert: str | None = Field(
+        default=None,
+        description="Path to client certificate for MQTT TLS",
+    )
+    mqtt_tls_client_key: str | None = Field(
+        default=None,
+        description="Path to client key for MQTT TLS",
+    )
+
+    # HTTP TLS for AAS/Submodel repositories
+    twin_tls_enabled: bool = Field(
+        default=False,
+        description="Enable TLS for TwinClient HTTP connections",
+    )
+    twin_tls_ca_cert: str | None = Field(
+        default=None,
+        description="Path to CA certificate for TwinClient TLS",
+    )
+    twin_tls_client_cert: str | None = Field(
+        default=None,
+        description="Path to client certificate for TwinClient TLS",
+    )
+    twin_tls_client_key: str | None = Field(
+        default=None,
+        description="Path to client key for TwinClient TLS",
+    )
+    twin_tls_insecure: bool = Field(
+        default=False,
+        description="Disable TLS verification for TwinClient (not recommended)",
+    )
 
     # LLM
     llm_provider: Literal["anthropic", "openai", "rules"] = Field(

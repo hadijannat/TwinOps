@@ -15,6 +15,7 @@ from starlette.types import ASGIApp
 
 from twinops.common.logging import get_logger
 from twinops.common.settings import Settings
+from twinops.common.http import set_subject
 
 logger = get_logger(__name__)
 
@@ -155,4 +156,5 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return JSONResponse({"error": exc.message}, status_code=exc.status_code)
 
         request.state.auth = auth
+        set_subject(auth.subject)
         return await call_next(request)

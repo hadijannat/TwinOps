@@ -336,6 +336,10 @@ Environment variables (prefix: `TWINOPS_`):
 | `MTLS_SUBJECT_HEADER` | `X-SSL-Client-DN` | Header carrying client subject |
 | `AGENT_WORKERS` | `1` | Uvicorn worker count for agent API |
 | `METRICS_MULTIPROC_DIR` | - | Directory for Prometheus multiprocess mode |
+| `MQTT_TLS_ENABLED` | `false` | Enable TLS for MQTT |
+| `MQTT_TLS_CA_CERT` | - | CA certificate path for MQTT TLS |
+| `MQTT_TLS_CLIENT_CERT` | - | Client cert path for MQTT TLS |
+| `MQTT_TLS_CLIENT_KEY` | - | Client key path for MQTT TLS |
 | `TRACING_ENABLED` | `false` | Enable OpenTelemetry tracing |
 | `TRACING_OTLP_ENDPOINT` | - | OTLP collector endpoint |
 | `TRACING_CONSOLE` | `false` | Emit traces to console |
@@ -349,6 +353,11 @@ Environment variables (prefix: `TWINOPS_`):
 | `TWIN_CLIENT_RECOVERY_TIMEOUT` | `30` | Seconds before half-open |
 | `TWIN_CLIENT_HALF_OPEN_MAX_CALLS` | `3` | Successes required to close circuit |
 | `TWIN_CLIENT_MAX_CONCURRENCY` | - | Max concurrent TwinClient HTTP calls |
+| `TWIN_TLS_ENABLED` | `false` | Enable TLS for TwinClient HTTP |
+| `TWIN_TLS_CA_CERT` | - | CA certificate path for TwinClient TLS |
+| `TWIN_TLS_CLIENT_CERT` | - | Client cert path for TwinClient TLS |
+| `TWIN_TLS_CLIENT_KEY` | - | Client key path for TwinClient TLS |
+| `TWIN_TLS_INSECURE` | `false` | Disable TLS verification (not recommended) |
 | `POLICY_CACHE_TTL_SECONDS` | `300` | Cache duration for safety policy |
 | `POLICY_MAX_AGE_SECONDS` | - | Maximum policy age before reload/deny |
 

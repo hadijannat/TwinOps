@@ -24,6 +24,7 @@ from twinops.agent.schema_gen import generate_all_tool_schemas
 from twinops.agent.shadow import ShadowTwinManager
 from twinops.agent.twin_client import TwinClient, TwinClientError
 from twinops.common.auth import AuthMiddleware
+from twinops.common.http import RequestIdMiddleware
 from twinops.common.logging import get_logger, setup_logging
 from twinops.common.mqtt import MqttClient
 from twinops.common.ratelimit import RateLimitMiddleware
@@ -289,6 +290,10 @@ class AgentServer:
             client_id=self._settings.mqtt_client_id,
             username=self._settings.mqtt_username,
             password=self._settings.mqtt_password,
+            tls=self._settings.mqtt_tls_enabled,
+            tls_ca_cert=self._settings.mqtt_tls_ca_cert,
+            tls_client_cert=self._settings.mqtt_tls_client_cert,
+            tls_client_key=self._settings.mqtt_tls_client_key,
         )
 
         # Create shadow twin with separate repo IDs for AAS and Submodel repositories
@@ -1139,6 +1144,7 @@ def create_app(settings: Settings | None = None) -> Starlette:
         exclude_paths=["/health", "/ready", "/metrics"],
     )
 
+    app.add_middleware(RequestIdMiddleware)
     app.add_middleware(
         AuthMiddleware,
         settings=settings,

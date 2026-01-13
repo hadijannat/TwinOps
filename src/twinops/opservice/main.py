@@ -15,6 +15,7 @@ from starlette.routing import Route
 import uvicorn
 
 from twinops.common.auth import AuthMiddleware
+from twinops.common.http import RequestIdMiddleware
 from twinops.common.logging import get_logger, setup_logging
 from twinops.common.metrics import MetricsMiddleware, metrics_endpoint
 from twinops.common.mqtt import MqttClient
@@ -328,6 +329,7 @@ def create_app(settings: Settings | None = None) -> Starlette:
         requests_per_minute=settings.rate_limit_rpm,
         exclude_paths=["/health", "/metrics"],
     )
+    app.add_middleware(RequestIdMiddleware)
     app.add_middleware(AuthMiddleware, settings=settings)
     app.add_middleware(
         MetricsMiddleware,

@@ -8,11 +8,13 @@ from typing import Any
 
 import aiohttp
 from urllib.parse import quote
+import ssl
 
 from twinops.common.basyx_topics import b64url_encode_nopad
 from twinops.common.logging import get_logger
 from twinops.common.settings import Settings
 from twinops.common.tracing import span
+from twinops.common.http import get_request_id
 
 logger = get_logger(__name__)
 
@@ -181,6 +183,7 @@ class TwinClient:
         self._sm_base = (settings.submodel_base_url or settings.twin_base_url).rstrip("/")
         self._timeout = aiohttp.ClientTimeout(total=settings.http_timeout)
         self._session: aiohttp.ClientSession | None = None
+        self._connector = None
         self._circuit_breaker = circuit_breaker or CircuitBreaker(
             failure_threshold=settings.twin_client_failure_threshold,
             recovery_timeout=settings.twin_client_recovery_timeout,
@@ -191,6 +194,14 @@ class TwinClient:
             if settings.twin_client_max_concurrency
             else None
         )
+        if settings.twin_tls_enabled:
+            ssl_context = ssl.create_default_context(cafile=settings.twin_tls_ca_cert)
+            if settings.twin_tls_insecure:
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+            if settings.twin_tls_client_cert and settings.twin_tls_client_key:
+                ssl_context.load_cert_chain(settings.twin_tls_client_cert, settings.twin_tls_client_key)
+            self._connector = aiohttp.TCPConnector(ssl=ssl_context)
 
     @property
     def circuit_breaker(self) -> CircuitBreaker:
@@ -199,7 +210,7 @@ class TwinClient:
 
     async def __aenter__(self) -> "TwinClient":
         """Enter async context."""
-        self._session = aiohttp.ClientSession(timeout=self._timeout)
+        self._session = aiohttp.ClientSession(timeout=self._timeout, connector=self._connector)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -211,7 +222,7 @@ class TwinClient:
     def _ensure_session(self) -> aiohttp.ClientSession:
         """Ensure session exists."""
         if not self._session:
-            self._session = aiohttp.ClientSession(timeout=self._timeout)
+            self._session = aiohttp.ClientSession(timeout=self._timeout, connector=self._connector)
         return self._session
 
     async def _protected_request(
@@ -239,6 +250,12 @@ class TwinClient:
         session = self._ensure_session()
 
         try:
+            headers = kwargs.get("headers") or {}
+            request_id = get_request_id()
+            if request_id and "X-Request-ID" not in headers:
+                headers["X-Request-ID"] = request_id
+            kwargs["headers"] = headers
+
             with span("twin_client_request", {"http.method": method, "http.url": url}):
                 if self._semaphore:
                     async with self._semaphore:
