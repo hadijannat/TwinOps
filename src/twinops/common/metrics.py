@@ -1,6 +1,18 @@
 """Prometheus metrics for TwinOps observability."""
 
-from prometheus_client import Counter, Gauge, Histogram, generate_latest
+import os
+import time
+
+from prometheus_client import (
+    CollectorRegistry,
+    Counter,
+    Gauge,
+    Histogram,
+    generate_latest,
+    multiprocess,
+)
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.types import ASGIApp
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -175,12 +187,54 @@ def update_pending_approvals(count: int) -> None:
 
 # === HTTP Endpoint ===
 
+class MetricsMiddleware(BaseHTTPMiddleware):
+    """HTTP request metrics middleware."""
+
+    def __init__(self, app: ASGIApp, exclude_paths: list[str] | None = None) -> None:
+        super().__init__(app)
+        self._exclude_paths = set(exclude_paths or [])
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        if request.url.path in self._exclude_paths:
+            return await call_next(request)
+
+        start = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            duration = time.perf_counter() - start
+            record_http_request(
+                method=request.method,
+                endpoint=request.url.path,
+                status=500,
+                latency=duration,
+            )
+            raise
+
+        duration = time.perf_counter() - start
+        record_http_request(
+            method=request.method,
+            endpoint=request.url.path,
+            status=response.status_code,
+            latency=duration,
+        )
+        return response
+
 async def metrics_endpoint(_request: Request) -> Response:
     """
     Prometheus metrics endpoint.
 
     Returns metrics in Prometheus text format.
     """
+    multiproc_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
+    if multiproc_dir:
+        registry = CollectorRegistry()
+        multiprocess.MultiProcessCollector(registry)
+        return Response(
+            generate_latest(registry),
+            media_type="text/plain; version=0.0.4; charset=utf-8",
+        )
+
     return Response(
         generate_latest(),
         media_type="text/plain; version=0.0.4; charset=utf-8",

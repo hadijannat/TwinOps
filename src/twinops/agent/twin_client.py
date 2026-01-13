@@ -6,6 +6,7 @@ from enum import Enum
 from typing import Any
 
 import aiohttp
+from urllib.parse import quote
 
 from twinops.common.basyx_topics import b64url_encode_nopad
 from twinops.common.logging import get_logger
@@ -327,7 +328,8 @@ class TwinClient:
             SubmodelElement JSON structure
         """
         sm_id_encoded = b64url_encode_nopad(submodel_id)
-        url = f"{self._sm_base}/submodels/{sm_id_encoded}/submodel-elements/{id_short_path}"
+        encoded_path = quote(id_short_path, safe="/")
+        url = f"{self._sm_base}/submodels/{sm_id_encoded}/submodel-elements/{encoded_path}"
 
         response = await self._protected_request("GET", url)
         async with response:
@@ -354,7 +356,8 @@ class TwinClient:
             Property value
         """
         sm_id_encoded = b64url_encode_nopad(submodel_id)
-        url = f"{self._sm_base}/submodels/{sm_id_encoded}/submodel-elements/{id_short_path}/$value"
+        encoded_path = quote(id_short_path, safe="/")
+        url = f"{self._sm_base}/submodels/{sm_id_encoded}/submodel-elements/{encoded_path}/$value"
 
         response = await self._protected_request("GET", url)
         async with response:
@@ -378,7 +381,8 @@ class TwinClient:
             value: New value
         """
         sm_id_encoded = b64url_encode_nopad(submodel_id)
-        url = f"{self._sm_base}/submodels/{sm_id_encoded}/submodel-elements/{id_short_path}/$value"
+        encoded_path = quote(id_short_path, safe="/")
+        url = f"{self._sm_base}/submodels/{sm_id_encoded}/submodel-elements/{encoded_path}/$value"
 
         response = await self._protected_request(
             "PUT",
@@ -417,7 +421,8 @@ class TwinClient:
         sm_id_encoded = b64url_encode_nopad(submodel_id)
 
         endpoint = "$invoke-async" if async_mode else "$invoke"
-        url = f"{self._sm_base}/submodels/{sm_id_encoded}/submodel-elements/{operation_path}/{endpoint}"
+        encoded_path = quote(operation_path, safe="/")
+        url = f"{self._sm_base}/submodels/{sm_id_encoded}/submodel-elements/{encoded_path}/{endpoint}"
 
         payload: dict[str, Any] = {
             "inputArguments": input_arguments,
@@ -507,7 +512,8 @@ class TwinClient:
             Job status including state and result (if complete)
         """
         sm_id_encoded = b64url_encode_nopad(submodel_id)
-        url = f"{self._sm_base}/submodels/{sm_id_encoded}/submodel-elements/{operation_path}/$result"
+        encoded_path = quote(operation_path, safe="/")
+        url = f"{self._sm_base}/submodels/{sm_id_encoded}/submodel-elements/{encoded_path}/$result"
 
         logger.debug(
             "Fetching job status via HTTP",

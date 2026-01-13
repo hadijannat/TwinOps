@@ -175,6 +175,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     def _get_client_id(self, request: Request) -> str:
         """Extract client identifier from request."""
+        auth = getattr(request.state, "auth", None)
+        if auth:
+            if getattr(auth, "fingerprint", None):
+                return f"cert:{auth.fingerprint}"
+            if getattr(auth, "subject", None):
+                return f"sub:{auth.subject}"
+
         # Try API key header first
         api_key = request.headers.get(self._client_id_header)
         if api_key:

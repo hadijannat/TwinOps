@@ -2,11 +2,13 @@
 
 import asyncio
 import json
+import os
 import signal
 import time
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 
 import uvicorn
 from starlette.applications import Starlette
@@ -21,8 +23,8 @@ from twinops.agent.safety import AuditLogger, SafetyKernel
 from twinops.agent.schema_gen import generate_all_tool_schemas
 from twinops.agent.shadow import ShadowTwinManager
 from twinops.agent.twin_client import TwinClient, TwinClientError
+from twinops.common.auth import AuthMiddleware
 from twinops.common.logging import get_logger, setup_logging
-from twinops.common.metrics import metrics_endpoint
 from twinops.common.mqtt import MqttClient
 from twinops.common.ratelimit import RateLimitMiddleware
 from twinops.common.settings import Settings, get_settings
@@ -87,10 +89,22 @@ class GracefulShutdown:
     def request_started(self) -> None:
         """Track start of a request."""
         self._active_requests += 1
+        try:
+            from twinops.common.metrics import update_active_requests
+
+            update_active_requests(self._active_requests)
+        except Exception:
+            pass
 
     def request_finished(self) -> None:
         """Track completion of a request."""
         self._active_requests = max(0, self._active_requests - 1)
+        try:
+            from twinops.common.metrics import update_active_requests
+
+            update_active_requests(self._active_requests)
+        except Exception:
+            pass
 
     def trigger_shutdown(self) -> None:
         """Trigger graceful shutdown."""
@@ -138,6 +152,7 @@ class AgentServer:
         self._shutdown = GracefulShutdown(drain_timeout=30.0)
         self._initialized = False
         self._start_time = time.time()
+        self._exit_stack = AsyncExitStack()
 
     async def _validate_dependencies(self) -> list[DependencyCheck]:
         """
@@ -284,57 +299,77 @@ class AgentServer:
             submodel_repo_id=self._settings.effective_submodel_repo_id,
         )
 
-        # Initialize shadow (connects MQTT)
-        async with self._mqtt_client.connect():
-            await self._shadow.initialize()
+        # Initialize shadow (connects MQTT and keeps connection open)
+        await self._exit_stack.enter_async_context(self._mqtt_client.connect())
+        await self._shadow.initialize()
 
-            # Load operations and build capability index
-            operations = await self._shadow.get_operations()
-            tools = generate_all_tool_schemas(operations)
-            capabilities = CapabilityIndex(tools)
+        # Load operations and build capability index
+        operations = await self._shadow.get_operations()
+        tools = generate_all_tool_schemas(operations)
+        capabilities = CapabilityIndex(tools)
 
-            logger.info("Loaded tools from AAS", count=len(tools))
+        logger.info("Loaded tools from AAS", count=len(tools))
 
-            # Create safety kernel
-            audit = AuditLogger(self._settings.audit_log_path)
-            self._safety = SafetyKernel(
-                shadow=self._shadow,
-                twin_client=self._twin_client,
-                audit_logger=audit,
-                policy_submodel_id=self._settings.policy_submodel_id,
-                require_policy_verification=self._settings.policy_verification_required,
-                interlock_fail_safe=self._settings.interlock_fail_safe,
-            )
+        # Create safety kernel
+        audit = AuditLogger(self._settings.audit_log_path)
+        self._safety = SafetyKernel(
+            shadow=self._shadow,
+            twin_client=self._twin_client,
+            audit_logger=audit,
+            policy_submodel_id=self._settings.policy_submodel_id,
+            require_policy_verification=self._settings.policy_verification_required,
+            interlock_fail_safe=self._settings.interlock_fail_safe,
+        )
 
-            # Create LLM client
-            llm = create_llm_client(self._settings)
+        # Create LLM client
+        llm = create_llm_client(self._settings)
 
-            # Create orchestrator
-            self._orchestrator = AgentOrchestrator(
-                llm=llm,
-                shadow=self._shadow,
-                twin_client=self._twin_client,
-                safety=self._safety,
-                capability_index=capabilities,
-                settings=self._settings,
-            )
+        # Create orchestrator
+        self._orchestrator = AgentOrchestrator(
+            llm=llm,
+            shadow=self._shadow,
+            twin_client=self._twin_client,
+            safety=self._safety,
+            capability_index=capabilities,
+            settings=self._settings,
+        )
 
-            self._initialized = True
-            logger.info(
-                "Agent server ready",
-                tools_loaded=len(tools),
-                aas_id=self._settings.aas_id,
-            )
+        self._initialized = True
+        logger.info(
+            "Agent server ready",
+            tools_loaded=len(tools),
+            aas_id=self._settings.aas_id,
+        )
 
     async def shutdown(self) -> None:
         """Clean up resources with graceful draining."""
         self._shutdown.trigger_shutdown()
         await self._shutdown.wait_for_drain()
 
+        await self._exit_stack.aclose()
+
         if self._twin_client:
             await self._twin_client.__aexit__(None, None, None)
 
         logger.info("Agent server shutdown complete")
+
+    def _get_roles(self, request: Request) -> tuple[str, ...]:
+        auth = getattr(request.state, "auth", None)
+        if auth and getattr(auth, "roles", None):
+            return auth.roles
+        roles_header = request.headers.get("X-Roles", "")
+        roles = tuple(r.strip() for r in roles_header.split(",") if r.strip())
+        return roles or self._settings.default_roles
+
+    def _get_subject(self, request: Request, fallback: str) -> str:
+        auth = getattr(request.state, "auth", None)
+        if auth and getattr(auth, "subject", None):
+            return auth.subject
+        return fallback
+
+    def _auth_method(self, request: Request) -> str:
+        auth = getattr(request.state, "auth", None)
+        return getattr(auth, "method", "header")
 
     async def handle_chat(self, request: Request) -> JSONResponse:
         """Handle chat endpoint."""
@@ -368,11 +403,7 @@ class AgentServer:
                     status_code=400,
                 )
 
-            # Extract roles from header
-            roles_header = request.headers.get("X-Roles", "")
-            roles = tuple(r.strip() for r in roles_header.split(",") if r.strip())
-            if not roles:
-                roles = self._settings.default_roles
+            roles = self._get_roles(request)
 
             # Process message
             response = await self._orchestrator.process_message(message, roles)
@@ -445,6 +476,21 @@ class AgentServer:
             and checks.get("mqtt_connected", False)
         )
 
+        try:
+            from twinops.common.metrics import (
+                update_circuit_breaker_state,
+                update_mqtt_status,
+                update_shadow_freshness,
+            )
+
+            update_mqtt_status(checks.get("mqtt_connected", False))
+            if self._shadow and self._shadow.is_initialized:
+                update_shadow_freshness(self._shadow.freshness_seconds)
+            if self._twin_client:
+                update_circuit_breaker_state(self._twin_client.circuit_breaker.state.value)
+        except Exception:
+            pass
+
         return JSONResponse(
             {
                 "status": "ready" if all_ready else "not_ready",
@@ -504,16 +550,15 @@ class AgentServer:
                 status_code=400,
             )
 
-        # Get approver identity from request body or header
         approver = "unknown"
-        try:
-            body = await request.json()
-            approver = body.get("approver", approver)
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-        # Try to get from header
-        approver = request.headers.get("X-Approver", approver)
+        if self._auth_method(request) != "mtls":
+            try:
+                body = await request.json()
+                approver = body.get("approver", approver)
+            except (json.JSONDecodeError, ValueError):
+                pass
+            approver = request.headers.get("X-Approver", approver)
+        approver = self._get_subject(request, approver)
 
         try:
             success = await self._safety.approve_task(task_id, approver)
@@ -554,18 +599,17 @@ class AgentServer:
                 status_code=400,
             )
 
-        # Get rejector identity and reason from request body
         rejector = "unknown"
         reason = ""
-        try:
-            body = await request.json()
-            rejector = body.get("rejector", rejector)
-            reason = body.get("reason", reason)
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-        # Try to get from header
-        rejector = request.headers.get("X-Rejector", rejector)
+        if self._auth_method(request) != "mtls":
+            try:
+                body = await request.json()
+                rejector = body.get("rejector", rejector)
+                reason = body.get("reason", reason)
+            except (json.JSONDecodeError, ValueError):
+                pass
+            rejector = request.headers.get("X-Rejector", rejector)
+        rejector = self._get_subject(request, rejector)
 
         try:
             success = await self._safety.reject_task(task_id, rejector, reason)
@@ -643,11 +687,7 @@ class AgentServer:
                 status_code=400,
             )
 
-        # Extract roles from header
-        roles_header = request.headers.get("X-Roles", "")
-        roles = tuple(r.strip() for r in roles_header.split(",") if r.strip())
-        if not roles:
-            roles = self._settings.default_roles
+        roles = self._get_roles(request)
 
         self._shutdown.request_started()
         try:
@@ -718,7 +758,7 @@ class AgentServer:
                             {
                                 "name": "X-Roles",
                                 "in": "header",
-                                "description": "Comma-separated list of user roles",
+                        "description": "Comma-separated list of user roles (ignored when mTLS auth is enabled).",
                                 "required": False,
                                 "schema": {"type": "string", "example": "operator,viewer"},
                             }
@@ -905,7 +945,7 @@ class AgentServer:
                             {
                                 "name": "X-Approver",
                                 "in": "header",
-                                "description": "Identity of the approver",
+                                "description": "Identity of the approver (ignored when mTLS auth is enabled).",
                                 "required": False,
                                 "schema": {"type": "string"},
                             },
@@ -919,7 +959,7 @@ class AgentServer:
                                         "properties": {
                                             "approver": {
                                                 "type": "string",
-                                                "description": "Identity of the approver",
+                                                "description": "Identity of the approver (ignored when mTLS auth is enabled).",
                                             }
                                         },
                                     }
@@ -964,7 +1004,7 @@ class AgentServer:
                             {
                                 "name": "X-Rejector",
                                 "in": "header",
-                                "description": "Identity of the rejector",
+                                "description": "Identity of the rejector (ignored when mTLS auth is enabled).",
                                 "required": False,
                                 "schema": {"type": "string"},
                             },
@@ -978,7 +1018,7 @@ class AgentServer:
                                         "properties": {
                                             "rejector": {
                                                 "type": "string",
-                                                "description": "Identity of the rejector",
+                                                "description": "Identity of the rejector (ignored when mTLS auth is enabled).",
                                             },
                                             "reason": {
                                                 "type": "string",
@@ -1036,13 +1076,25 @@ class AgentServer:
                 {"name": "Health", "description": "Health and readiness probes"},
                 {"name": "Observability", "description": "Monitoring and metrics"},
             ],
+            "components": {
+                "securitySchemes": {
+                    "mutualTLS": {
+                        "type": "mutualTLS",
+                        "description": "Client certificate authentication when TWINOPS_AUTH_MODE=mtls.",
+                    }
+                }
+            },
         }
+        if self._settings.auth_mode == "mtls":
+            openapi_spec["security"] = [{"mutualTLS": []}]
         return JSONResponse(openapi_spec)
 
 
 def create_app(settings: Settings | None = None) -> Starlette:
     """Create the Starlette application."""
     settings = settings or get_settings()
+    _configure_metrics(settings)
+    from twinops.common.metrics import MetricsMiddleware, metrics_endpoint
     server = AgentServer(settings)
 
     @asynccontextmanager
@@ -1077,6 +1129,11 @@ def create_app(settings: Settings | None = None) -> Starlette:
 
     app = Starlette(routes=routes, lifespan=lifespan)
 
+    app.add_middleware(
+        AuthMiddleware,
+        settings=settings,
+    )
+
     # Add rate limiting middleware
     app.add_middleware(
         RateLimitMiddleware,
@@ -1084,21 +1141,62 @@ def create_app(settings: Settings | None = None) -> Starlette:
         exclude_paths=["/health", "/ready", "/metrics"],
     )
 
+    app.add_middleware(
+        MetricsMiddleware,
+        exclude_paths=["/health", "/ready", "/metrics"],
+    )
+
     return app
+
+
+def _configure_metrics(settings: Settings) -> None:
+    if settings.agent_workers <= 1:
+        return
+    if settings.metrics_multiprocess_dir:
+        os.environ.setdefault("PROMETHEUS_MULTIPROC_DIR", settings.metrics_multiprocess_dir)
+
+
+def _prepare_multiprocess_dir(settings: Settings) -> None:
+    if settings.agent_workers <= 1 or not settings.metrics_multiprocess_dir:
+        return
+    metrics_dir = Path(settings.metrics_multiprocess_dir)
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    for entry in metrics_dir.iterdir():
+        if entry.is_file():
+            entry.unlink()
 
 
 def main():
     """Entry point for agent server."""
     setup_logging()
     settings = get_settings()
-    app = create_app(settings)
+    workers = max(1, settings.agent_workers)
 
-    uvicorn.run(
-        app,
-        host=settings.agent_host,
-        port=settings.agent_port,
-        log_level="info",
-    )
+    if workers > 1 and not settings.metrics_multiprocess_dir:
+        logger.warning(
+            "metrics_multiprocess_dir not set; /metrics will be per-worker",
+            workers=workers,
+        )
+
+    _prepare_multiprocess_dir(settings)
+
+    if workers > 1:
+        uvicorn.run(
+            "twinops.agent.main:create_app",
+            host=settings.agent_host,
+            port=settings.agent_port,
+            log_level="info",
+            factory=True,
+            workers=workers,
+        )
+    else:
+        app = create_app(settings)
+        uvicorn.run(
+            app,
+            host=settings.agent_host,
+            port=settings.agent_port,
+            log_level="info",
+        )
 
 
 if __name__ == "__main__":

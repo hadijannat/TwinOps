@@ -167,6 +167,21 @@ Be concise and focus on the task at hand."""
         roles: tuple[str, ...],
     ) -> ToolResult:
         """Execute a single tool with safety checks."""
+        start_time = time.perf_counter()
+
+        def record_outcome(outcome: str, risk_level: str = "unknown") -> None:
+            try:
+                from twinops.common.metrics import record_tool_call
+
+                record_tool_call(
+                    tool=tool_name,
+                    risk_level=risk_level,
+                    outcome=outcome,
+                    latency=time.perf_counter() - start_time,
+                )
+            except Exception:
+                pass
+
         # Generate idempotency key for this action
         action_id = str(uuid.uuid4())
         logger.debug("Starting tool execution", tool=tool_name, action_id=action_id)
@@ -174,6 +189,7 @@ Be concise and focus on the task at hand."""
         # Find tool spec
         tool = self._capabilities.get_tool_by_name(tool_name)
         if not tool:
+            record_outcome("error")
             return ToolResult(
                 tool_name=tool_name,
                 success=False,
@@ -195,6 +211,7 @@ Be concise and focus on the task at hand."""
         )
 
         if not decision.allowed:
+            record_outcome("denied", tool.risk_level)
             return ToolResult(
                 tool_name=tool_name,
                 success=False,
@@ -213,6 +230,7 @@ Be concise and focus on the task at hand."""
             result = await self._invoke_operation(tool, params, action_id)
         except Exception as e:
             self._safety.log_error(tool_name, roles, str(e), action_id)
+            record_outcome("error", tool.risk_level)
             return ToolResult(
                 tool_name=tool_name,
                 success=False,
@@ -233,6 +251,7 @@ Be concise and focus on the task at hand."""
                 simulation_result=result if simulated else None,
                 action_id=action_id,
             )
+            record_outcome("approval_required", tool.risk_level)
             return ToolResult(
                 tool_name=tool_name,
                 success=True,
@@ -245,6 +264,7 @@ Be concise and focus on the task at hand."""
 
         # For simulation, indicate it was simulation-only
         if simulated:
+            record_outcome("simulated", tool.risk_level)
             return ToolResult(
                 tool_name=tool_name,
                 success=True,
@@ -263,6 +283,10 @@ Be concise and focus on the task at hand."""
                 submodel_id=tool.submodel_id,
                 operation_path=tool.operation_path,
             )
+            record_outcome(
+                "success" if final_result.get("status") == "COMPLETED" else "error",
+                tool.risk_level,
+            )
             return ToolResult(
                 tool_name=tool_name,
                 success=final_result.get("status") == "COMPLETED",
@@ -271,6 +295,7 @@ Be concise and focus on the task at hand."""
                 action_id=action_id,
             )
 
+        record_outcome("success", tool.risk_level)
         return ToolResult(
             tool_name=tool_name,
             success=True,
@@ -354,7 +379,16 @@ Be concise and focus on the task at hand."""
 
             if job_status:
                 if isinstance(job_status, str):
-                    job_status = json.loads(job_status)
+                    try:
+                        job_status = json.loads(job_status)
+                    except json.JSONDecodeError:
+                        logger.warning("Invalid job status JSON payload", job_id=job_id)
+                        job_status = None
+
+                if not job_status:
+                    polls_without_update += 1
+                    await asyncio.sleep(self._settings.job_poll_interval)
+                    continue
 
                 # Track if shadow is updating
                 current_version = json.dumps(job_status, sort_keys=True)
@@ -517,8 +551,8 @@ Be concise and focus on the task at hand."""
         params = task.get("args", {})
 
         # Find the tool
-        tools = self._capabilities.search(tool_name, k=1)
-        if not tools:
+        tool = self._capabilities.get_tool_by_name(tool_name)
+        if not tool:
             return AgentResponse(
                 reply=f"Tool '{tool_name}' from task {task_id} not found.",
                 tool_results=[ToolResult(
@@ -527,8 +561,6 @@ Be concise and focus on the task at hand."""
                     error=f"Tool not found: {tool_name}",
                 )],
             )
-
-        tool = tools[0]
 
         # Verify roles (use original requesting roles or current roles)
         original_roles = tuple(task.get("requested_by_roles", []))
@@ -550,22 +582,37 @@ Be concise and focus on the task at hand."""
             roles=roles,
         )
 
-        try:
-            result = await self._twin.invoke_operation(
-                submodel_id=tool.submodel_id,
-                operation_path=tool.operation_path,
-                input_arguments=self._build_input_arguments(tool, params),
-                async_mode=True,
-            )
+        action_id = str(uuid.uuid4())
 
-            # Log execution
+        try:
+            result = await self._invoke_operation(tool, params, action_id)
+
             self._safety.log_execution(
                 tool_name=tool_name,
                 risk=tool.risk_level,
                 roles=roles,
                 result=result,
                 simulated=False,
+                action_id=action_id,
             )
+
+            job_id = result.get("jobId") or result.get("job_id")
+            if job_id:
+                final_result = await self._monitor_job(
+                    job_id=job_id,
+                    submodel_id=tool.submodel_id,
+                    operation_path=tool.operation_path,
+                )
+                return AgentResponse(
+                    reply=f"Task {task_id} executed successfully.",
+                    tool_results=[ToolResult(
+                        tool_name=tool_name,
+                        success=final_result.get("status") == "COMPLETED",
+                        result=final_result,
+                        job_id=job_id,
+                        action_id=action_id,
+                    )],
+                )
 
             return AgentResponse(
                 reply=f"Task {task_id} executed successfully.",
@@ -573,19 +620,19 @@ Be concise and focus on the task at hand."""
                     tool_name=tool_name,
                     success=True,
                     result=result,
-                    job_id=result.get("jobId"),
-                    status="completed",
+                    action_id=action_id,
                 )],
             )
 
         except Exception as e:
-            self._safety.log_error(tool_name, roles, str(e))
+            self._safety.log_error(tool_name, roles, str(e), action_id)
             return AgentResponse(
                 reply=f"Task {task_id} execution failed: {e}",
                 tool_results=[ToolResult(
                     tool_name=tool_name,
                     success=False,
                     error=str(e),
+                    action_id=action_id,
                 )],
             )
 

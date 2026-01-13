@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -17,6 +18,11 @@ from twinops.agent.policy_signing import (
 from twinops.agent.shadow import ShadowTwinManager
 from twinops.agent.twin_client import TwinClient
 from twinops.common.logging import get_logger
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX platforms
+    fcntl = None
 
 logger = get_logger(__name__)
 
@@ -95,21 +101,41 @@ class AuditLogger:
         self._log_path = Path(log_path)
         self._log_path.parent.mkdir(parents=True, exist_ok=True)
         self._prev_hash = ""
+        self._lock_supported = fcntl is not None
 
-        # Load previous hash if log exists
         if self._log_path.exists():
-            with open(self._log_path) as f:
-                for line in f:
-                    try:
-                        entry = json.loads(line)
-                        self._prev_hash = entry.get("hash", "")
-                    except json.JSONDecodeError:
-                        pass
+            try:
+                with open(self._log_path, "rb") as f:
+                    self._prev_hash = self._read_last_hash_locked(f)
+            except OSError:
+                self._prev_hash = ""
 
     def _compute_hash(self, data: dict[str, Any]) -> str:
         """Compute SHA-256 hash of entry data."""
         content = json.dumps(data, sort_keys=True)
-        return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    def _acquire_lock(self, file_obj) -> None:
+        if self._lock_supported:
+            fcntl.flock(file_obj.fileno(), fcntl.LOCK_EX)
+
+    def _release_lock(self, file_obj) -> None:
+        if self._lock_supported:
+            fcntl.flock(file_obj.fileno(), fcntl.LOCK_UN)
+
+    def _read_last_hash_locked(self, file_obj) -> str:
+        file_obj.seek(0)
+        last_line = b""
+        for line in file_obj:
+            if line.strip():
+                last_line = line
+        if not last_line:
+            return ""
+        try:
+            entry = json.loads(last_line.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return ""
+        return entry.get("hash", "")
 
     def log(
         self,
@@ -152,14 +178,21 @@ class AuditLogger:
 
         entry.update(extra)
 
-        # Compute and add hash
-        entry["hash"] = self._compute_hash(entry)
+        with open(self._log_path, "a+b") as f:
+            self._acquire_lock(f)
+            try:
+                prev_hash = self._read_last_hash_locked(f) or self._prev_hash
+                entry["prev_hash"] = prev_hash
+                entry["hash"] = self._compute_hash(entry)
+
+                f.seek(0, os.SEEK_END)
+                f.write((json.dumps(entry) + "\n").encode("utf-8"))
+                f.flush()
+                os.fsync(f.fileno())
+            finally:
+                self._release_lock(f)
+
         self._prev_hash = entry["hash"]
-
-        # Write to log
-        with open(self._log_path, "a") as f:
-            f.write(json.dumps(entry) + "\n")
-
         logger.debug("Audit entry logged", audit_event=event, tool=tool)
 
     def verify_chain(self) -> tuple[bool, list[int]]:
@@ -308,11 +341,14 @@ class SafetyKernel:
                     self._policy_load_time = time.time()
 
                     if self._require_verification:
-                        logger.warning("Using unsigned policy")
+                        logger.error("Unsigned policy rejected")
+                        raise PolicyVerificationError("Unsigned policy rejected")
 
                     return config
 
         # Fallback to defaults
+        if self._require_verification:
+            raise PolicyVerificationError("Signed policy not found")
         self._cached_policy = PolicyConfig()
         self._policy_load_time = time.time()
         return self._cached_policy
@@ -346,7 +382,20 @@ class SafetyKernel:
         Returns:
             SafetyDecision with allow/deny and conditions
         """
-        config = await self.load_policy()
+        try:
+            config = await self.load_policy()
+        except PolicyVerificationError as e:
+            logger.error("Policy verification failed", error=str(e))
+            try:
+                from twinops.common.metrics import record_safety_decision
+
+                record_safety_decision("denied", "policy_verification")
+            except Exception:
+                pass
+            return SafetyDecision(
+                allowed=False,
+                reason="Policy verification failed",
+            )
 
         # Log intent with action context
         self._audit.log(
@@ -367,6 +416,12 @@ class SafetyKernel:
                 reason="rbac",
                 roles=roles,
             )
+            try:
+                from twinops.common.metrics import record_safety_decision
+
+                record_safety_decision("denied", "rbac")
+            except Exception:
+                pass
             return SafetyDecision(
                 allowed=False,
                 reason=f"Role(s) {roles} not authorized for {tool_name}",
@@ -381,6 +436,12 @@ class SafetyKernel:
                 reason="interlock",
                 message=interlock_msg,
             )
+            try:
+                from twinops.common.metrics import record_safety_decision
+
+                record_safety_decision("denied", "interlock")
+            except Exception:
+                pass
             return SafetyDecision(
                 allowed=False,
                 reason=interlock_msg,
@@ -393,11 +454,20 @@ class SafetyKernel:
         # Layer 4: Approval requirement
         require_approval = self._should_require_approval(risk, config)
 
-        return SafetyDecision(
+        decision = SafetyDecision(
             allowed=True,
             force_simulation=force_sim,
             require_approval=require_approval,
         )
+        try:
+            from twinops.common.metrics import record_safety_decision
+
+            decision_reason = "approval_required" if require_approval else "allowed"
+            record_safety_decision("allowed", decision_reason)
+        except Exception:
+            pass
+
+        return decision
 
     def _check_rbac(
         self,

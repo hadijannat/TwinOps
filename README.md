@@ -329,6 +329,40 @@ Environment variables (prefix: `TWINOPS_`):
 | `ANTHROPIC_API_KEY` | - | Anthropic API key |
 | `AAS_ID` | `urn:example:aas:pump-001` | Target AAS identifier |
 | `REPO_ID` | `default` | Repository ID for MQTT topics |
+| `AUTH_MODE` | `none` | API auth mode (`none` or `mtls`) |
+| `AUTH_EXEMPT_PATHS` | `["/health","/ready"]` | Paths exempt from auth (JSON array) |
+| `MTLS_ROLE_MAP` | `{}` | JSON map of subject → roles (e.g., `{"CN=ops-client":["operator"]}`) |
+| `MTLS_TRUST_PROXY_HEADERS` | `false` | Trust mTLS headers from a reverse proxy |
+| `MTLS_SUBJECT_HEADER` | `X-SSL-Client-DN` | Header carrying client subject |
+| `AGENT_WORKERS` | `1` | Uvicorn worker count for agent API |
+| `METRICS_MULTIPROC_DIR` | - | Directory for Prometheus multiprocess mode |
+
+---
+
+## 🔐 mTLS Authentication
+
+When `TWINOPS_AUTH_MODE=mtls`, the API requires a client certificate. Roles and approver/rejector identity are derived from the certificate subject (or trusted proxy headers).
+
+```bash
+export TWINOPS_AUTH_MODE=mtls
+export TWINOPS_MTLS_ROLE_MAP='{"CN=ops-client,OU=TwinOps":["operator","maintenance"]}'
+export TWINOPS_MTLS_TRUST_PROXY_HEADERS=true
+export TWINOPS_MTLS_SUBJECT_HEADER=X-SSL-Client-DN
+```
+
+> In mTLS mode, `X-Roles`, `X-Approver`, and `X-Rejector` headers are ignored.
+
+---
+
+## 📈 Multi-Worker & Metrics
+
+```bash
+export TWINOPS_AGENT_WORKERS=4
+export TWINOPS_METRICS_MULTIPROC_DIR=/tmp/twinops-prom
+```
+
+- `/metrics` uses Prometheus multiprocess aggregation when `METRICS_MULTIPROC_DIR` is set.
+- If you want `/metrics` unauthenticated in mTLS mode, add it to `TWINOPS_AUTH_EXEMPT_PATHS`.
 
 ---
 

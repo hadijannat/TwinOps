@@ -120,6 +120,44 @@ class Settings(BaseSettings):
         default=60.0,
         description="Rate limit in requests per minute",
     )
+    agent_workers: int = Field(
+        default=1,
+        description="Number of Uvicorn worker processes for the agent API",
+    )
+    metrics_multiprocess_dir: str | None = Field(
+        default=None,
+        description="Directory for Prometheus multiprocess metrics (required for >1 worker)",
+    )
+
+    # Auth
+    auth_mode: Literal["none", "mtls"] = Field(
+        default="none",
+        description="Authentication mode for the agent API",
+    )
+    auth_exempt_paths: tuple[str, ...] = Field(
+        default=("/health", "/ready"),
+        description="Paths exempt from authentication",
+    )
+    mtls_role_map: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="Mapping of certificate subject to roles (JSON)",
+    )
+    mtls_allow_unmapped: bool = Field(
+        default=False,
+        description="Allow unmapped client subjects with default roles",
+    )
+    mtls_trust_proxy_headers: bool = Field(
+        default=False,
+        description="Trust mTLS headers from a reverse proxy",
+    )
+    mtls_subject_header: str = Field(
+        default="X-SSL-Client-DN",
+        description="Header carrying client subject DN when proxying mTLS",
+    )
+    mtls_forwarded_cert_header: str = Field(
+        default="X-Forwarded-Client-Cert",
+        description="Header carrying client certificate details when proxying mTLS",
+    )
 
     # Safety
     default_roles: tuple[str, ...] = Field(
