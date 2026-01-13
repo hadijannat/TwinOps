@@ -23,6 +23,13 @@ def test_submodel_value_route_takes_precedence() -> None:
         payload = value_resp.json()
         assert isinstance(payload, str)
         assert "\"tasks\"" in payload
+        encoded_resp = client.get(
+            f"/submodels/{submodel_id}/submodel-elements/TasksJson/%24value"
+        )
+        assert encoded_resp.status_code == 200
+        encoded_payload = encoded_resp.json()
+        assert isinstance(encoded_payload, str)
+        assert "\"tasks\"" in encoded_payload
 
         element_resp = client.get(
             f"/submodels/{submodel_id}/submodel-elements/TasksJson"
