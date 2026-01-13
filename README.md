@@ -337,6 +337,8 @@ Environment variables (prefix: `TWINOPS_`):
 | `OPSERVICE_HMAC_HEADER` | `X-TwinOps-Signature` | HMAC signature header |
 | `OPSERVICE_HMAC_TIMESTAMP_HEADER` | `X-TwinOps-Timestamp` | HMAC timestamp header |
 | `OPSERVICE_HMAC_TTL_SECONDS` | `300` | Max age of HMAC signatures |
+| `OPSERVICE_JOB_RETENTION_SECONDS` | `3600` | Retain completed opservice jobs for this long |
+| `OPSERVICE_JOB_CLEANUP_INTERVAL` | `300` | Interval between opservice job cleanup sweeps |
 | `MTLS_ROLE_MAP` | `{}` | JSON map of subject → roles (e.g., `{"CN=ops-client":["operator"]}`) |
 | `MTLS_TRUST_PROXY_HEADERS` | `false` | Trust mTLS headers from a reverse proxy |
 | `MTLS_SUBJECT_HEADER` | `X-SSL-Client-DN` | Header carrying client subject |

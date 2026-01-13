@@ -260,6 +260,14 @@ class Settings(BaseSettings):
         default=8087,
         description="Port for the operation service",
     )
+    opservice_job_retention_seconds: float = Field(
+        default=3600.0,
+        description="Seconds to retain completed opservice jobs",
+    )
+    opservice_job_cleanup_interval: float = Field(
+        default=300.0,
+        description="Seconds between opservice job cleanup sweeps",
+    )
 
     # Timeouts
     http_timeout: float = Field(

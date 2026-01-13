@@ -4,7 +4,7 @@ import asyncio
 import json
 import time
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -226,6 +226,20 @@ class OperationExecutor:
         """Get all jobs."""
         return list(self._jobs.values())
 
+    def purge_jobs(self, retention_seconds: float) -> int:
+        """Remove completed jobs older than the retention window."""
+        if retention_seconds <= 0:
+            return 0
+        cutoff = time.time() - retention_seconds
+        expired = [
+            job_id
+            for job_id, job in self._jobs.items()
+            if job.completed_at and job.completed_at < cutoff
+        ]
+        for job_id in expired:
+            self._jobs.pop(job_id, None)
+        return len(expired)
+
 
 class OperationServer:
     """HTTP server for operation service."""
@@ -234,14 +248,32 @@ class OperationServer:
         """Initialize server."""
         self._settings = settings
         self._executor = OperationExecutor()
+        self._cleanup_task: asyncio.Task[None] | None = None
 
     async def startup(self) -> None:
         """Initialize components."""
         logger.info("Starting operation service...")
+        if (
+            self._settings.opservice_job_cleanup_interval > 0
+            and self._settings.opservice_job_retention_seconds > 0
+        ):
+            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
 
     async def shutdown(self) -> None:
         """Clean up resources."""
-        pass
+        if self._cleanup_task:
+            self._cleanup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._cleanup_task
+
+    async def _cleanup_loop(self) -> None:
+        interval = self._settings.opservice_job_cleanup_interval
+        retention = self._settings.opservice_job_retention_seconds
+        while True:
+            await asyncio.sleep(interval)
+            removed = self._executor.purge_jobs(retention)
+            if removed:
+                logger.info("Purged completed jobs", removed=removed)
 
     async def handle_invoke(self, request: Request) -> JSONResponse:
         """Handle operation invocation."""
