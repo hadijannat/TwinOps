@@ -94,9 +94,25 @@ Suggested video flow (2–3 minutes):
 4. “Emergency stop” → HITL approval → approve → execute  
 5. Show audit log entries on the right panel
 
-When you record the walkthrough, drop the assets here:
+Screenshots (captured from the live demo):
 
-- `assets/demo/twinops-demo.gif`
+![TwinOps demo walkthrough](assets/demo/twinops-demo.gif)
+
+<table>
+  <tr>
+    <td><img src="assets/demo/01-initial.png" alt="Demo initial screen" width="320"></td>
+    <td><img src="assets/demo/02-rbac-denied.png" alt="RBAC denial in viewer role" width="320"></td>
+    <td><img src="assets/demo/03-interlock-denied.png" alt="Interlock denial above 95C" width="320"></td>
+  </tr>
+  <tr>
+    <td><img src="assets/demo/04-simulation.png" alt="Simulation forced for HIGH risk" width="320"></td>
+    <td><img src="assets/demo/05-hitl-pending.png" alt="HITL approval pending" width="320"></td>
+    <td><img src="assets/demo/06-hitl-approved.png" alt="HITL approved and executed" width="320"></td>
+  </tr>
+</table>
+
+If you record a walkthrough, drop the assets here:
+
 - `assets/demo/twinops-demo.mp4`
 
 ---
