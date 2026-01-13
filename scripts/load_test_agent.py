@@ -40,6 +40,7 @@ async def run_load_test(
     requests: int,
     concurrency: int,
     role: str,
+    timeout: aiohttp.ClientTimeout,
 ) -> tuple[float, float, float, float, int]:
     payload = {"message": "Get status"}
     headers = {"Content-Type": "application/json", "X-Roles": role}
@@ -48,7 +49,7 @@ async def run_load_test(
     latencies: List[float] = []
     errors: List[int] = []
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         tasks = [
             _run_one(session, url, payload, headers, sem, latencies, errors)
             for _ in range(requests)
@@ -71,6 +72,7 @@ def main() -> int:
     parser.add_argument("--requests", type=int, default=50)
     parser.add_argument("--concurrency", type=int, default=5)
     parser.add_argument("--role", default="operator")
+    parser.add_argument("--timeout", type=float, default=10.0)
     parser.add_argument("--max-error-rate", type=float, default=0.1)
     args = parser.parse_args()
 
@@ -80,6 +82,7 @@ def main() -> int:
             requests=args.requests,
             concurrency=args.concurrency,
             role=args.role,
+            timeout=aiohttp.ClientTimeout(total=args.timeout),
         )
     )
 

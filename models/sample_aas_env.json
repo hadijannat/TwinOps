@@ -418,7 +418,7 @@
           "modelType": "Property",
           "idShort": "PolicyPublicKeyPem",
           "valueType": "xs:string",
-          "value": "",
+          "value": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAbDf+8kJucRZE7FglUf7rLsjZbrP/E4tdNqpasYMOMU4=\n-----END PUBLIC KEY-----\n",
           "description": [
             {
               "language": "en",
@@ -430,7 +430,7 @@
           "modelType": "Property",
           "idShort": "PolicySignature",
           "valueType": "xs:string",
-          "value": "",
+          "value": "fE0u2o17RHuEYmDeRfTEMgifODsxEhkhCQ157904PaEqidLkK9jPJNxQ8iOVNEeFsdql6l2yDKVPxPI5V+O5DA==",
           "description": [
             {
               "language": "en",
