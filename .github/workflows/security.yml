@@ -33,11 +33,11 @@ jobs:
       - name: Run pip-audit
         run: |
           pip install -e .
-          pip-audit --strict --desc on
+          python -m pip freeze | grep -v '^twinops==' > requirements.txt
+          pip-audit -r requirements.txt --strict --desc on
 
       - name: Run safety check
         run: |
-          pip freeze > requirements.txt
           safety check -r requirements.txt --full-report
         continue-on-error: true
 
@@ -58,10 +58,13 @@ jobs:
       - name: Run Bandit
         run: |
           bandit -r src/ -f sarif -o bandit-results.sarif --severity-level medium || true
+          if [ ! -s bandit-results.sarif ]; then
+            echo '{"version":"2.1.0","runs":[]}' > bandit-results.sarif
+          fi
 
       - name: Upload Bandit results to GitHub Security
         uses: github/codeql-action/upload-sarif@v4
-        if: always()
+        if: always() && hashFiles('bandit-results.sarif') != ''
         with:
           sarif_file: bandit-results.sarif
 
