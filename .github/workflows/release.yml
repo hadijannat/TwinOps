@@ -19,7 +19,7 @@ jobs:
         id: version
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION"
 
       - name: Validate version format
@@ -118,7 +118,7 @@ jobs:
           if [ -n "$PREV_TAG" ]; then
             echo "## Changes since $PREV_TAG" > CHANGELOG.md
             echo "" >> CHANGELOG.md
-            git log $PREV_TAG..HEAD --pretty=format:"- %s (%h)" >> CHANGELOG.md
+            git log "$PREV_TAG"..HEAD --pretty=format:"- %s (%h)" >> CHANGELOG.md
           else
             echo "## Initial Release" > CHANGELOG.md
             echo "" >> CHANGELOG.md
