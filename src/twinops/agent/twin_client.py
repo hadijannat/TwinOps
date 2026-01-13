@@ -2,6 +2,7 @@
 
 import json
 import time
+import asyncio
 from enum import Enum
 from typing import Any
 
@@ -90,6 +91,12 @@ class CircuitBreaker:
                     "Circuit breaker closing after successful recovery",
                     successful_calls=self._half_open_calls,
                 )
+                try:
+                    from twinops.common.metrics import record_circuit_transition
+
+                    record_circuit_transition(self._state.value, CircuitState.CLOSED.value)
+                except Exception:
+                    pass
                 self._state = CircuitState.CLOSED
                 self._failure_count = 0
         elif self._state == CircuitState.CLOSED:
@@ -103,6 +110,12 @@ class CircuitBreaker:
 
         if self._state == CircuitState.HALF_OPEN:
             logger.warning("Circuit breaker reopening after failure in half-open state")
+            try:
+                from twinops.common.metrics import record_circuit_transition
+
+                record_circuit_transition(self._state.value, CircuitState.OPEN.value)
+            except Exception:
+                pass
             self._state = CircuitState.OPEN
         elif self._failure_count >= self._failure_threshold:
             logger.warning(
@@ -110,6 +123,12 @@ class CircuitBreaker:
                 failure_count=self._failure_count,
                 threshold=self._failure_threshold,
             )
+            try:
+                from twinops.common.metrics import record_circuit_transition
+
+                record_circuit_transition(self._state.value, CircuitState.OPEN.value)
+            except Exception:
+                pass
             self._state = CircuitState.OPEN
 
     def can_execute(self) -> bool:
@@ -167,6 +186,11 @@ class TwinClient:
             recovery_timeout=settings.twin_client_recovery_timeout,
             half_open_max_calls=settings.twin_client_half_open_max_calls,
         )
+        self._semaphore = (
+            asyncio.Semaphore(settings.twin_client_max_concurrency)
+            if settings.twin_client_max_concurrency
+            else None
+        )
 
     @property
     def circuit_breaker(self) -> CircuitBreaker:
@@ -216,7 +240,11 @@ class TwinClient:
 
         try:
             with span("twin_client_request", {"http.method": method, "http.url": url}):
-                response = await session.request(method, url, **kwargs)
+                if self._semaphore:
+                    async with self._semaphore:
+                        response = await session.request(method, url, **kwargs)
+                else:
+                    response = await session.request(method, url, **kwargs)
             # Record success for 2xx and 4xx (client errors are not server failures)
             if response.status < 500:
                 self._circuit_breaker.record_success()

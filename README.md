@@ -342,9 +342,13 @@ Environment variables (prefix: `TWINOPS_`):
 | `TRACING_SERVICE_NAME` | - | Override service name for traces |
 | `TOOL_CONCURRENCY_LIMIT` | - | Max concurrent tool executions |
 | `LLM_CONCURRENCY_LIMIT` | - | Max concurrent LLM requests |
+| `TOOL_EXECUTION_TIMEOUT` | - | Tool execution timeout (seconds) |
+| `JOB_POLL_MAX_INTERVAL` | `5.0` | Max backoff for job polling |
+| `JOB_POLL_JITTER` | `0.1` | Jitter ratio for job polling |
 | `TWIN_CLIENT_FAILURE_THRESHOLD` | `5` | Circuit breaker failures before opening |
 | `TWIN_CLIENT_RECOVERY_TIMEOUT` | `30` | Seconds before half-open |
 | `TWIN_CLIENT_HALF_OPEN_MAX_CALLS` | `3` | Successes required to close circuit |
+| `TWIN_CLIENT_MAX_CONCURRENCY` | - | Max concurrent TwinClient HTTP calls |
 | `POLICY_CACHE_TTL_SECONDS` | `300` | Cache duration for safety policy |
 | `POLICY_MAX_AGE_SECONDS` | - | Maximum policy age before reload/deny |
 

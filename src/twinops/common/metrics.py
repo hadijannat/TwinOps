@@ -170,6 +170,14 @@ def record_job_result(status: str, source: str) -> None:
     JOB_RESULTS_TOTAL.labels(status=status, source=source).inc()
 
 
+def record_circuit_transition(from_state: str, to_state: str) -> None:
+    """Record a circuit breaker transition."""
+    CIRCUIT_BREAKER_TRANSITIONS.labels(
+        from_state=from_state,
+        to_state=to_state,
+    ).inc()
+
+
 def update_shadow_freshness(seconds_since_update: float) -> None:
     """Update shadow twin freshness gauge."""
     SHADOW_TWIN_FRESHNESS.set(seconds_since_update)

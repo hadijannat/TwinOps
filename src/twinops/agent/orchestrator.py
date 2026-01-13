@@ -3,6 +3,7 @@
 import asyncio
 import json
 import time
+import random
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -133,21 +134,36 @@ Be concise and focus on the task at hand."""
 
         # Get LLM response
         llm_start = time.perf_counter()
-        if self._llm_semaphore:
-            async with self._llm_semaphore:
-                with span("llm_call", {"llm.provider": self._settings.llm_provider}):
-                    response = await self._llm.chat(
+
+        async def _chat() -> Any:
+            with span("llm_call", {"llm.provider": self._settings.llm_provider}):
+                return await asyncio.wait_for(
+                    self._llm.chat(
                         messages=self._conversation,
                         tools=tool_schemas,
                         system=self.SYSTEM_PROMPT,
-                    )
-        else:
-            with span("llm_call", {"llm.provider": self._settings.llm_provider}):
-                response = await self._llm.chat(
-                    messages=self._conversation,
-                    tools=tool_schemas,
-                    system=self.SYSTEM_PROMPT,
+                    ),
+                    timeout=self._settings.llm_request_timeout,
                 )
+
+        try:
+            if self._llm_semaphore:
+                async with self._llm_semaphore:
+                    response = await _chat()
+            else:
+                response = await _chat()
+        except asyncio.TimeoutError:
+            logger.error(
+                "LLM request timed out",
+                timeout=self._settings.llm_request_timeout,
+                provider=self._settings.llm_provider,
+            )
+            record_llm_call(self._settings.llm_provider, time.perf_counter() - llm_start)
+            return AgentResponse(reply="LLM request timed out.")
+        except Exception as e:
+            logger.error("LLM request failed", error=str(e))
+            record_llm_call(self._settings.llm_provider, time.perf_counter() - llm_start)
+            return AgentResponse(reply="LLM request failed.")
 
         record_llm_call(self._settings.llm_provider, time.perf_counter() - llm_start)
 
@@ -264,11 +280,19 @@ Be concise and focus on the task at hand."""
                 return await self._invoke_operation(tool, params, action_id)
 
         try:
-            if self._tool_semaphore:
-                async with self._tool_semaphore:
-                    result = await _invoke()
+            async def _invoke_with_timeout() -> dict[str, Any]:
+                if self._tool_semaphore:
+                    async with self._tool_semaphore:
+                        return await _invoke()
+                return await _invoke()
+
+            if self._settings.tool_execution_timeout:
+                result = await asyncio.wait_for(
+                    _invoke_with_timeout(),
+                    timeout=self._settings.tool_execution_timeout,
+                )
             else:
-                result = await _invoke()
+                result = await _invoke_with_timeout()
         except Exception as e:
             self._safety.log_error(tool_name, roles, str(e), action_id)
             record_outcome("error", tool.risk_level)
@@ -485,7 +509,17 @@ Be concise and focus on the task at hand."""
                 # Reset counter to avoid hammering HTTP endpoint
                 polls_without_update = 0
 
-            await asyncio.sleep(self._settings.job_poll_interval)
+            interval = self._settings.job_poll_interval
+            if polls_without_update:
+                interval = min(
+                    interval * (1 + polls_without_update / 3),
+                    self._settings.job_poll_max_interval,
+                )
+                if self._settings.job_poll_jitter:
+                    jitter = interval * self._settings.job_poll_jitter
+                    interval = max(0.1, interval + random.uniform(-jitter, jitter))
+
+            await asyncio.sleep(interval)
 
         record_job_result("TIMEOUT", "shadow")
         return {"job_id": job_id, "status": "TIMEOUT"}

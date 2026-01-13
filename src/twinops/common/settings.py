@@ -208,6 +208,14 @@ class Settings(BaseSettings):
         default=1.0,
         description="Interval for polling job status",
     )
+    job_poll_max_interval: float = Field(
+        default=5.0,
+        description="Maximum backoff interval for job polling",
+    )
+    job_poll_jitter: float = Field(
+        default=0.1,
+        description="Jitter ratio (0-1) applied to job polling interval",
+    )
     job_timeout: float = Field(
         default=300.0,
         description="Maximum time to wait for job completion",
@@ -241,6 +249,14 @@ class Settings(BaseSettings):
     llm_concurrency_limit: int | None = Field(
         default=None,
         description="Max concurrent LLM requests (None = unlimited)",
+    )
+    twin_client_max_concurrency: int | None = Field(
+        default=None,
+        description="Max concurrent TwinClient HTTP requests (None = unlimited)",
+    )
+    tool_execution_timeout: float | None = Field(
+        default=None,
+        description="Max seconds to wait for a tool execution before timing out",
     )
 
     # Tracing
