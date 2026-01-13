@@ -27,7 +27,7 @@ jobs:
       image-tag: ${{ steps.resolve.outputs.tag }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Resolve image tag
         id: resolve
@@ -54,7 +54,7 @@ jobs:
     environment: staging
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Configure kubectl
         uses: azure/k8s-set-context@v4
@@ -124,7 +124,7 @@ jobs:
     environment: production
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Configure kubectl
         uses: azure/k8s-set-context@v4
