@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import ssl
 import time
 from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
@@ -9,7 +10,6 @@ from dataclasses import dataclass
 from typing import Any, Self
 
 import aiomqtt
-import ssl
 
 from twinops.common.basyx_topics import TopicSubscription
 from twinops.common.logging import get_logger
@@ -38,7 +38,7 @@ class ExponentialBackoff:
     def next_delay(self) -> float:
         """Calculate next delay with exponential backoff."""
         delay = min(
-            self._base_delay * (self._multiplier ** self._attempt),
+            self._base_delay * (self._multiplier**self._attempt),
             self._max_delay,
         )
         self._attempt += 1
@@ -268,7 +268,11 @@ class MqttClient:
             async for msg in client.messages:
                 message = MqttMessage(
                     topic=str(msg.topic),
-                    payload=bytes(msg.payload) if isinstance(msg.payload, (bytes, bytearray)) else msg.payload.encode() if isinstance(msg.payload, str) else bytes(msg.payload),
+                    payload=bytes(msg.payload)
+                    if isinstance(msg.payload, (bytes, bytearray))
+                    else msg.payload.encode()
+                    if isinstance(msg.payload, str)
+                    else bytes(msg.payload),
                     qos=msg.qos,
                     retain=msg.retain,
                 )

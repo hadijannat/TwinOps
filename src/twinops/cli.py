@@ -3,7 +3,8 @@
 import asyncio
 import json
 import sys
-from typing import Any
+from collections.abc import Callable, Coroutine
+from typing import Any, ParamSpec, TypeVar
 
 import click
 from rich.console import Console
@@ -16,11 +17,16 @@ from twinops.common.settings import Settings
 
 console = Console()
 
+P = ParamSpec("P")
+R = TypeVar("R")
 
-def async_command(f):
+
+def async_command(f: Callable[P, Coroutine[Any, Any, R]]) -> Callable[P, R]:
     """Decorator to run async commands."""
-    def wrapper(*args, **kwargs):
+
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         return asyncio.run(f(*args, **kwargs))
+
     return wrapper
 
 
@@ -31,7 +37,7 @@ def async_command(f):
     help="AAS repository base URL",
 )
 @click.pass_context
-def cli(ctx: click.Context, base_url: str):
+def cli(ctx: click.Context, base_url: str) -> None:
     """TwinOps CLI - Manage AI agent tasks and policies."""
     ctx.ensure_object(dict)
     ctx.obj["base_url"] = base_url
@@ -39,12 +45,15 @@ def cli(ctx: click.Context, base_url: str):
 
 # === Task Management ===
 
+
 @cli.command("list-tasks")
-@click.option("--submodel-id", default="urn:example:submodel:control", help="Submodel ID containing tasks")
+@click.option(
+    "--submodel-id", default="urn:example:submodel:control", help="Submodel ID containing tasks"
+)
 @click.option("--property-path", default="TasksJson", help="Path to TasksJson property")
 @click.pass_context
 @async_command
-async def list_tasks(ctx: click.Context, submodel_id: str, property_path: str):
+async def list_tasks(ctx: click.Context, submodel_id: str, property_path: str) -> None:
     """List pending approval tasks."""
     settings = Settings(twin_base_url=ctx.obj["base_url"])
 
@@ -69,6 +78,7 @@ async def list_tasks(ctx: click.Context, submodel_id: str, property_path: str):
 
     for task in tasks:
         import time
+
         created = time.strftime("%Y-%m-%d %H:%M", time.localtime(task.get("created_at", 0)))
         table.add_row(
             task.get("task_id", ""),
@@ -88,7 +98,9 @@ async def list_tasks(ctx: click.Context, submodel_id: str, property_path: str):
 @click.option("--property-path", default="TasksJson", help="Path to TasksJson")
 @click.pass_context
 @async_command
-async def approve_task(ctx: click.Context, task_id: str, submodel_id: str, property_path: str):
+async def approve_task(
+    ctx: click.Context, task_id: str, submodel_id: str, property_path: str
+) -> None:
     """Approve a pending task."""
     settings = Settings(twin_base_url=ctx.obj["base_url"])
 
@@ -124,7 +136,7 @@ async def reject_task(
     reason: str,
     submodel_id: str,
     property_path: str,
-):
+) -> None:
     """Reject a pending task."""
     settings = Settings(twin_base_url=ctx.obj["base_url"])
 
@@ -150,9 +162,10 @@ async def reject_task(
 
 # === Policy Management ===
 
+
 @cli.command("generate-keypair")
 @click.option("--output", "-o", default=".", help="Output directory for keys")
-def generate_keys(output: str):
+def generate_keys(output: str) -> None:
     """Generate Ed25519 key pair for policy signing."""
     from pathlib import Path
 
@@ -176,7 +189,7 @@ def generate_keys(output: str):
 @click.option("--policy-file", "-p", required=True, help="Path to policy JSON file")
 @click.option("--private-key", "-k", required=True, help="Path to private key PEM")
 @click.option("--output", "-o", help="Output file (default: stdout)")
-def sign_policy_cmd(policy_file: str, private_key: str, output: str | None):
+def sign_policy_cmd(policy_file: str, private_key: str, output: str | None) -> None:
     """Sign a policy file."""
     from pathlib import Path
 
@@ -212,7 +225,7 @@ def sign_policy_cmd(policy_file: str, private_key: str, output: str | None):
 @click.option("--policy-json", "-p", required=True, help="Policy JSON string or file path")
 @click.option("--public-key", "-k", required=True, help="Public key PEM file path")
 @click.option("--signature", "-s", required=True, help="Base64 signature")
-def verify_policy_cmd(policy_json: str, public_key: str, signature: str):
+def verify_policy_cmd(policy_json: str, public_key: str, signature: str) -> None:
     """Verify a policy signature."""
     from pathlib import Path
 
@@ -238,9 +251,10 @@ def verify_policy_cmd(policy_json: str, public_key: str, signature: str):
 
 # === Audit Management ===
 
+
 @cli.command("verify-audit")
 @click.option("--log-path", default="audit_logs/audit.jsonl", help="Path to audit log")
-def verify_audit(log_path: str):
+def verify_audit(log_path: str) -> None:
     """Verify audit log integrity."""
     audit = AuditLogger(log_path)
     is_valid, broken = audit.verify_chain()
@@ -257,7 +271,7 @@ def verify_audit(log_path: str):
 @click.option("--last", "-n", default=20, help="Number of entries to show")
 @click.option("--filter-event", help="Filter by event type")
 @click.option("--filter-tool", help="Filter by tool name")
-def show_audit(log_path: str, last: int, filter_event: str | None, filter_tool: str | None):
+def show_audit(log_path: str, last: int, filter_event: str | None, filter_tool: str | None) -> None:
     """Show recent audit log entries."""
     from pathlib import Path
 
@@ -267,7 +281,7 @@ def show_audit(log_path: str, last: int, filter_event: str | None, filter_tool: 
         return
 
     entries = []
-    with open(log_file, "r") as f:
+    with open(log_file) as f:
         for line in f:
             try:
                 entry = json.loads(line)
@@ -290,6 +304,7 @@ def show_audit(log_path: str, last: int, filter_event: str | None, filter_tool: 
     table.add_column("Details")
 
     import time
+
     for entry in entries:
         ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(entry.get("ts", 0)))
         details = ""
@@ -313,17 +328,18 @@ def show_audit(log_path: str, last: int, filter_event: str | None, filter_tool: 
 
 # === Status Commands ===
 
+
 @cli.command("status")
 @click.pass_context
 @async_command
-async def show_status(ctx: click.Context):
+async def show_status(ctx: click.Context) -> None:
     """Show twin and agent status."""
     settings = Settings(twin_base_url=ctx.obj["base_url"])
 
     async with TwinClient(settings) as client:
         try:
             shells = await client.get_all_aas()
-            console.print(f"[green]✓ Twin connected[/green]")
+            console.print("[green]✓ Twin connected[/green]")
             console.print(f"  AAS count: {len(shells)}")
 
             for shell in shells:
@@ -333,7 +349,7 @@ async def show_status(ctx: click.Context):
             console.print(f"[red]✗ Twin connection failed: {e}[/red]")
 
 
-def main():
+def main() -> None:
     """CLI entry point."""
     cli(obj={})
 

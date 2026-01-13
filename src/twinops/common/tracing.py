@@ -42,10 +42,12 @@ def setup_tracing(
     global _tracer
 
     # Create resource with service info
-    resource = Resource.create({
-        "service.name": service_name,
-        "service.version": "1.0.0",
-    })
+    resource = Resource.create(
+        {
+            "service.name": service_name,
+            "service.version": "1.0.0",
+        }
+    )
 
     # Create tracer provider
     provider = TracerProvider(resource=resource)
@@ -126,6 +128,7 @@ def trace_tool_execution(
         roles: User roles executing the tool
         simulated: Whether this is a simulated execution
     """
+
     def decorator(func: F) -> F:
         @wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -146,7 +149,9 @@ def trace_tool_execution(
                     current_span.set_status(Status(StatusCode.ERROR, str(e)))
                     current_span.record_exception(e)
                     raise
+
         return wrapper  # type: ignore[return-value]
+
     return decorator
 
 
@@ -157,6 +162,7 @@ def trace_llm_call(provider: str) -> Callable[[F], F]:
     Args:
         provider: LLM provider name (anthropic, openai, rules)
     """
+
     def decorator(func: F) -> F:
         @wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -173,12 +179,15 @@ def trace_llm_call(provider: str) -> Callable[[F], F]:
                     current_span.set_status(Status(StatusCode.ERROR, str(e)))
                     current_span.record_exception(e)
                     raise
+
         return wrapper  # type: ignore[return-value]
+
     return decorator
 
 
 def trace_safety_evaluation() -> Callable[[F], F]:
     """Decorator for tracing safety kernel evaluations."""
+
     def decorator(func: F) -> F:
         @wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -188,9 +197,7 @@ def trace_safety_evaluation() -> Callable[[F], F]:
                     result = await func(*args, **kwargs)
                     current_span.set_attribute("safety.allowed", result.allowed)
                     current_span.set_attribute("safety.force_simulation", result.force_simulation)
-                    current_span.set_attribute(
-                        "safety.require_approval", result.require_approval
-                    )
+                    current_span.set_attribute("safety.require_approval", result.require_approval)
                     if result.reason:
                         current_span.set_attribute("safety.reason", result.reason)
                     return result
@@ -198,7 +205,9 @@ def trace_safety_evaluation() -> Callable[[F], F]:
                     current_span.set_status(Status(StatusCode.ERROR, str(e)))
                     current_span.record_exception(e)
                     raise
+
         return wrapper  # type: ignore[return-value]
+
     return decorator
 
 
@@ -209,6 +218,7 @@ def trace_http_request(operation: str) -> Callable[[F], F]:
     Args:
         operation: Name of the HTTP operation
     """
+
     def decorator(func: F) -> F:
         @wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -225,7 +235,9 @@ def trace_http_request(operation: str) -> Callable[[F], F]:
                     current_span.set_status(Status(StatusCode.ERROR, str(e)))
                     current_span.record_exception(e)
                     raise
+
         return wrapper  # type: ignore[return-value]
+
     return decorator
 
 

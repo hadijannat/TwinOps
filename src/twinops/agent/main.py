@@ -5,10 +5,12 @@ import json
 import os
 import signal
 import time
+from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from typing import Any, cast
 
 import uvicorn
 from starlette.applications import Starlette
@@ -19,11 +21,11 @@ from starlette.routing import Route
 from twinops.agent.capabilities import CapabilityIndex
 from twinops.agent.llm.factory import create_llm_client
 from twinops.agent.orchestrator import AgentOrchestrator
-from twinops.agent.safety import AuditLogger, SafetyKernel
+from twinops.agent.safety import AuditLogger, RiskLevel, SafetyKernel
 from twinops.agent.schema_gen import generate_all_tool_schemas
 from twinops.agent.shadow import ShadowTwinManager
 from twinops.agent.twin_client import TwinClient, TwinClientError
-from twinops.common.auth import AuthMiddleware
+from twinops.common.auth import AuthContext, AuthMiddleware
 from twinops.common.errors import ErrorCode, error_response
 from twinops.common.http import RequestIdMiddleware
 from twinops.common.logging import get_logger, setup_logging
@@ -51,7 +53,7 @@ class DependencyCheck:
     name: str
     status: DependencyStatus
     message: str
-    details: dict | None = None
+    details: dict[str, Any] | None = None
 
 
 class StartupValidationError(Exception):
@@ -165,47 +167,59 @@ class AgentServer:
             List of dependency check results
         """
         checks: list[DependencyCheck] = []
+        if not self._twin_client:
+            raise RuntimeError("Twin client not initialized")
 
         # Check AAS Repository
         try:
             aas_list = await self._twin_client.get_all_aas()
-            checks.append(DependencyCheck(
-                name="aas_repository",
-                status=DependencyStatus.OK,
-                message=f"Connected, {len(aas_list)} AAS available",
-                details={"aas_count": len(aas_list)},
-            ))
+            checks.append(
+                DependencyCheck(
+                    name="aas_repository",
+                    status=DependencyStatus.OK,
+                    message=f"Connected, {len(aas_list)} AAS available",
+                    details={"aas_count": len(aas_list)},
+                )
+            )
 
             # Check if configured AAS exists
             if self._settings.startup_validate_aas:
                 aas_ids = [aas.get("id", "") for aas in aas_list]
                 if self._settings.aas_id in aas_ids:
-                    checks.append(DependencyCheck(
-                        name="configured_aas",
-                        status=DependencyStatus.OK,
-                        message=f"AAS '{self._settings.aas_id}' found",
-                    ))
+                    checks.append(
+                        DependencyCheck(
+                            name="configured_aas",
+                            status=DependencyStatus.OK,
+                            message=f"AAS '{self._settings.aas_id}' found",
+                        )
+                    )
                 else:
-                    checks.append(DependencyCheck(
-                        name="configured_aas",
-                        status=DependencyStatus.NOT_FOUND,
-                        message=f"AAS '{self._settings.aas_id}' not found in repository",
-                        details={"available_aas": aas_ids[:10]},  # Limit for logging
-                    ))
+                    checks.append(
+                        DependencyCheck(
+                            name="configured_aas",
+                            status=DependencyStatus.NOT_FOUND,
+                            message=f"AAS '{self._settings.aas_id}' not found in repository",
+                            details={"available_aas": aas_ids[:10]},  # Limit for logging
+                        )
+                    )
 
         except TwinClientError as e:
-            checks.append(DependencyCheck(
-                name="aas_repository",
-                status=DependencyStatus.UNAVAILABLE,
-                message=f"Cannot connect to AAS repository: {e}",
-                details={"url": self._settings.twin_base_url},
-            ))
+            checks.append(
+                DependencyCheck(
+                    name="aas_repository",
+                    status=DependencyStatus.UNAVAILABLE,
+                    message=f"Cannot connect to AAS repository: {e}",
+                    details={"url": self._settings.twin_base_url},
+                )
+            )
         except Exception as e:
-            checks.append(DependencyCheck(
-                name="aas_repository",
-                status=DependencyStatus.ERROR,
-                message=f"Unexpected error: {e}",
-            ))
+            checks.append(
+                DependencyCheck(
+                    name="aas_repository",
+                    status=DependencyStatus.ERROR,
+                    message=f"Unexpected error: {e}",
+                )
+            )
 
         return checks
 
@@ -224,7 +238,8 @@ class AgentServer:
 
             # Check if all critical dependencies are OK
             critical_failed = [
-                c for c in last_checks
+                c
+                for c in last_checks
                 if c.status != DependencyStatus.OK
                 and c.name in ("aas_repository", "configured_aas")
             ]
@@ -277,7 +292,8 @@ class AgentServer:
                 "Startup validation failed",
                 failed_checks=[
                     {"name": c.name, "status": c.status.value, "message": c.message}
-                    for c in e.checks if c.status != DependencyStatus.OK
+                    for c in e.checks
+                    if c.status != DependencyStatus.OK
                 ],
             )
             # Clean up twin client
@@ -329,17 +345,23 @@ class AgentServer:
             interlock_fail_safe=self._settings.interlock_fail_safe,
             policy_cache_ttl_seconds=self._settings.policy_cache_ttl_seconds,
             policy_max_age_seconds=self._settings.policy_max_age_seconds,
+            default_risk_level=RiskLevel(self._settings.default_risk_level),
         )
 
         # Create LLM client
         llm = create_llm_client(self._settings)
 
         # Create orchestrator
+        if not self._shadow or not self._twin_client or not self._safety:
+            raise RuntimeError("Agent dependencies not initialized")
+        shadow = self._shadow
+        twin_client = self._twin_client
+        safety = self._safety
         self._orchestrator = AgentOrchestrator(
             llm=llm,
-            shadow=self._shadow,
-            twin_client=self._twin_client,
-            safety=self._safety,
+            shadow=shadow,
+            twin_client=twin_client,
+            safety=safety,
             capability_index=capabilities,
             settings=self._settings,
         )
@@ -364,22 +386,22 @@ class AgentServer:
         logger.info("Agent server shutdown complete")
 
     def _get_roles(self, request: Request) -> tuple[str, ...]:
-        auth = getattr(request.state, "auth", None)
-        if auth and getattr(auth, "roles", None):
+        auth = cast(AuthContext | None, getattr(request.state, "auth", None))
+        if auth and auth.roles:
             return auth.roles
         roles_header = request.headers.get("X-Roles", "")
         roles = tuple(r.strip() for r in roles_header.split(",") if r.strip())
         return roles or self._settings.default_roles
 
     def _get_subject(self, request: Request, fallback: str) -> str:
-        auth = getattr(request.state, "auth", None)
-        if auth and getattr(auth, "subject", None):
+        auth = cast(AuthContext | None, getattr(request.state, "auth", None))
+        if auth and auth.subject:
             return auth.subject
         return fallback
 
     def _auth_method(self, request: Request) -> str:
-        auth = getattr(request.state, "auth", None)
-        return getattr(auth, "method", "header")
+        auth = cast(AuthContext | None, getattr(request.state, "auth", None))
+        return auth.method if auth else "header"
 
     async def handle_chat(self, request: Request) -> JSONResponse:
         """Handle chat endpoint."""
@@ -423,22 +445,24 @@ class AgentServer:
             # Process message
             response = await self._orchestrator.process_message(message, roles)
 
-            return JSONResponse({
-                "reply": response.reply,
-                "tool_results": [
-                    {
-                        "tool": r.tool_name,
-                        "success": r.success,
-                        "result": r.result,
-                        "error": r.error,
-                        "simulated": r.simulated,
-                        "status": r.status,
-                    }
-                    for r in response.tool_results
-                ],
-                "pending_approval": response.pending_approval,
-                "task_id": response.task_id,
-            })
+            return JSONResponse(
+                {
+                    "reply": response.reply,
+                    "tool_results": [
+                        {
+                            "tool": r.tool_name,
+                            "success": r.success,
+                            "result": r.result,
+                            "error": r.error,
+                            "simulated": r.simulated,
+                            "status": r.status,
+                        }
+                        for r in response.tool_results
+                    ],
+                    "pending_approval": response.pending_approval,
+                    "task_id": response.task_id,
+                }
+            )
         finally:
             self._shutdown.request_finished()
 
@@ -457,9 +481,7 @@ class AgentServer:
 
         # Include shadow twin freshness if initialized
         if self._shadow and self._shadow.is_initialized:
-            response_data["shadow_freshness_seconds"] = round(
-                self._shadow.freshness_seconds, 1
-            )
+            response_data["shadow_freshness_seconds"] = round(self._shadow.freshness_seconds, 1)
             response_data["shadow_event_count"] = self._shadow.event_count
 
         return JSONResponse(response_data)
@@ -474,13 +496,10 @@ class AgentServer:
         checks = {
             "initialized": self._initialized,
             "orchestrator": self._orchestrator is not None,
-            "mqtt_connected": (
-                self._mqtt_client.is_connected if self._mqtt_client else False
-            ),
+            "mqtt_connected": (self._mqtt_client.is_connected if self._mqtt_client else False),
             "shadow_initialized": self._shadow is not None,
             "twin_client_circuit": (
-                self._twin_client.circuit_breaker.state.value
-                if self._twin_client else "unknown"
+                self._twin_client.circuit_breaker.state.value if self._twin_client else "unknown"
             ),
         }
 
@@ -498,7 +517,7 @@ class AgentServer:
                 update_shadow_freshness,
             )
 
-            update_mqtt_status(checks.get("mqtt_connected", False))
+            update_mqtt_status(bool(checks.get("mqtt_connected", False)))
             if self._shadow and self._shadow.is_initialized:
                 update_shadow_freshness(self._shadow.freshness_seconds)
             if self._twin_client:
@@ -536,10 +555,12 @@ class AgentServer:
 
         try:
             tasks = await self._safety.get_pending_tasks()
-            return JSONResponse({
-                "tasks": tasks,
-                "count": len(tasks),
-            })
+            return JSONResponse(
+                {
+                    "tasks": tasks,
+                    "count": len(tasks),
+                }
+            )
         except Exception as e:
             logger.error("Failed to list tasks", error=str(e))
             return error_response(
@@ -579,15 +600,26 @@ class AgentServer:
                 pass
             approver = request.headers.get("X-Approver", approver)
         approver = self._get_subject(request, approver)
+        roles = self._get_roles(request)
 
         try:
-            success = await self._safety.approve_task(task_id, approver)
+            if not await self._safety.is_approval_authorized(roles):
+                return error_response(
+                    ErrorCode.FORBIDDEN,
+                    "Roles not authorized to approve tasks",
+                    status_code=403,
+                    details={"roles": list(roles)},
+                )
+            success = await self._safety.approve_task(task_id, approver, roles)
             if success:
-                return JSONResponse({
-                    "status": "approved",
-                    "task_id": task_id,
-                    "approved_by": approver,
-                })
+                return JSONResponse(
+                    {
+                        "status": "approved",
+                        "task_id": task_id,
+                        "approved_by": approver,
+                        "approved_by_roles": list(roles),
+                    }
+                )
             else:
                 return error_response(
                     ErrorCode.NOT_FOUND,
@@ -635,16 +667,27 @@ class AgentServer:
                 pass
             rejector = request.headers.get("X-Rejector", rejector)
         rejector = self._get_subject(request, rejector)
+        roles = self._get_roles(request)
 
         try:
-            success = await self._safety.reject_task(task_id, rejector, reason)
+            if not await self._safety.is_approval_authorized(roles):
+                return error_response(
+                    ErrorCode.FORBIDDEN,
+                    "Roles not authorized to reject tasks",
+                    status_code=403,
+                    details={"roles": list(roles)},
+                )
+            success = await self._safety.reject_task(task_id, rejector, reason, roles)
             if success:
-                return JSONResponse({
-                    "status": "rejected",
-                    "task_id": task_id,
-                    "rejected_by": rejector,
-                    "reason": reason,
-                })
+                return JSONResponse(
+                    {
+                        "status": "rejected",
+                        "task_id": task_id,
+                        "rejected_by": rejector,
+                        "rejected_by_roles": list(roles),
+                        "reason": reason,
+                    }
+                )
             else:
                 return error_response(
                     ErrorCode.NOT_FOUND,
@@ -728,20 +771,22 @@ class AgentServer:
         try:
             response = await self._orchestrator.execute_approved_task(task_id, roles)
 
-            return JSONResponse({
-                "reply": response.reply,
-                "tool_results": [
-                    {
-                        "tool": r.tool_name,
-                        "success": r.success,
-                        "result": r.result,
-                        "error": r.error,
-                        "job_id": r.job_id,
-                        "status": r.status,
-                    }
-                    for r in response.tool_results
-                ],
-            })
+            return JSONResponse(
+                {
+                    "reply": response.reply,
+                    "tool_results": [
+                        {
+                            "tool": r.tool_name,
+                            "success": r.success,
+                            "result": r.result,
+                            "error": r.error,
+                            "job_id": r.job_id,
+                            "status": r.status,
+                        }
+                        for r in response.tool_results
+                    ],
+                }
+            )
         except Exception as e:
             logger.error("Failed to execute task", task_id=task_id, error=str(e))
             return error_response(
@@ -794,7 +839,7 @@ class AgentServer:
                             {
                                 "name": "X-Roles",
                                 "in": "header",
-                        "description": "Comma-separated list of user roles (ignored when mTLS auth is enabled).",
+                                "description": "Comma-separated list of user roles (ignored when mTLS auth is enabled).",
                                 "required": False,
                                 "schema": {"type": "string", "example": "operator,viewer"},
                             }
@@ -828,7 +873,9 @@ class AgentServer:
                                                 "reply": {"type": "string"},
                                                 "tool_results": {
                                                     "type": "array",
-                                                    "items": {"$ref": "#/components/schemas/ToolResult"},
+                                                    "items": {
+                                                        "$ref": "#/components/schemas/ToolResult"
+                                                    },
                                                 },
                                                 "pending_approval": {"type": "boolean"},
                                                 "task_id": {"type": "string"},
@@ -1317,7 +1364,9 @@ class AgentServer:
                                                 "reply": {"type": "string"},
                                                 "tool_results": {
                                                     "type": "array",
-                                                    "items": {"$ref": "#/components/schemas/ToolResult"},
+                                                    "items": {
+                                                        "$ref": "#/components/schemas/ToolResult"
+                                                    },
                                                 },
                                             },
                                         },
@@ -1493,7 +1542,7 @@ class AgentServer:
                         "type": "mutualTLS",
                         "description": "Client certificate authentication when TWINOPS_AUTH_MODE=mtls.",
                     }
-                }
+                },
             },
         }
         if self._settings.auth_mode == "mtls":
@@ -1506,10 +1555,11 @@ def create_app(settings: Settings | None = None) -> Starlette:
     settings = settings or get_settings()
     _configure_metrics(settings)
     from twinops.common.metrics import MetricsMiddleware, metrics_endpoint
+
     server = AgentServer(settings)
 
     @asynccontextmanager
-    async def lifespan(_app: Starlette):
+    async def lifespan(_app: Starlette) -> AsyncIterator[None]:
         # Setup signal handlers for graceful shutdown
         loop = asyncio.get_running_loop()
 
@@ -1578,7 +1628,7 @@ def _prepare_multiprocess_dir(settings: Settings) -> None:
             entry.unlink()
 
 
-def main():
+def main() -> None:
     """Entry point for agent server."""
     setup_logging()
     settings = get_settings()

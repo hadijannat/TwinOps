@@ -12,9 +12,9 @@ from prometheus_client import (
     multiprocess,
 )
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from starlette.types import ASGIApp
 from starlette.requests import Request
 from starlette.responses import Response
+from starlette.types import ASGIApp
 
 # === Counters ===
 
@@ -114,6 +114,7 @@ PENDING_APPROVALS = Gauge(
 
 # === Helper Functions ===
 
+
 def record_tool_call(
     tool: str,
     risk_level: str,
@@ -206,6 +207,7 @@ def update_pending_approvals(count: int) -> None:
 
 # === HTTP Endpoint ===
 
+
 class MetricsMiddleware(BaseHTTPMiddleware):
     """HTTP request metrics middleware."""
 
@@ -239,6 +241,7 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         )
         return response
 
+
 async def metrics_endpoint(_request: Request) -> Response:
     """
     Prometheus metrics endpoint.
@@ -248,7 +251,7 @@ async def metrics_endpoint(_request: Request) -> Response:
     multiproc_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
     if multiproc_dir:
         registry = CollectorRegistry()
-        multiprocess.MultiProcessCollector(registry)
+        multiprocess.MultiProcessCollector(registry)  # type: ignore[no-untyped-call]
         return Response(
             generate_latest(registry),
             media_type="text/plain; version=0.0.4; charset=utf-8",

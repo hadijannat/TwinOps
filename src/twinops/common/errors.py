@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 from starlette.responses import JSONResponse
@@ -26,7 +25,7 @@ def error_response(
     status_code: int,
     details: dict[str, Any] | None = None,
 ) -> JSONResponse:
-    payload = {
+    payload: dict[str, dict[str, Any]] = {
         "error": {
             "code": code,
             "message": message,

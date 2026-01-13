@@ -4,9 +4,9 @@ import base64
 from dataclasses import dataclass
 from typing import Any
 
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
-from cryptography.exceptions import InvalidSignature
 
 from twinops.common.logging import get_logger
 
@@ -148,14 +148,24 @@ async def extract_signed_policy_from_submodel(
         id_short = elem.get("idShort", "")
 
         if id_short == "PolicyJson":
-            policy_json = elem.get("value")
+            value = elem.get("value")
+            if isinstance(value, str):
+                policy_json = value
         elif id_short == "PolicyPublicKeyPem":
-            public_key_pem = elem.get("value")
+            value = elem.get("value")
+            if isinstance(value, str):
+                public_key_pem = value
         elif id_short == "PolicySignature":
-            signature_b64 = elem.get("value")
+            value = elem.get("value")
+            if isinstance(value, str):
+                signature_b64 = value
 
     if not all([policy_json, public_key_pem, signature_b64]):
         return None
+
+    assert policy_json is not None
+    assert public_key_pem is not None
+    assert signature_b64 is not None
 
     return SignedPolicy(
         policy_json=policy_json,
@@ -194,4 +204,7 @@ def verify_and_load_policy(
 
     signed_policy.is_verified = is_valid
 
-    return json.loads(signed_policy.policy_json)
+    parsed = json.loads(signed_policy.policy_json)
+    if not isinstance(parsed, dict):
+        raise PolicyVerificationError("Policy JSON must be a JSON object")
+    return parsed

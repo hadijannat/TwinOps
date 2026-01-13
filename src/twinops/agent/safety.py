@@ -17,13 +17,16 @@ from twinops.agent.policy_signing import (
 )
 from twinops.agent.shadow import ShadowTwinManager
 from twinops.agent.twin_client import TwinClient
-from twinops.common.logging import get_logger
 from twinops.common.http import get_request_id, get_subject
+from twinops.common.logging import get_logger
 
+fcntl: Any
+fcntl_module: Any | None
 try:
-    import fcntl
+    import fcntl as fcntl_module
 except ImportError:  # pragma: no cover - non-POSIX platforms
-    fcntl = None
+    fcntl_module = None
+fcntl = fcntl_module
 
 logger = get_logger(__name__)
 
@@ -52,6 +55,7 @@ class PolicyConfig:
 
     require_simulation_for_risk: RiskLevel = RiskLevel.HIGH
     require_approval_for_risk: RiskLevel = RiskLevel.CRITICAL
+    approval_roles: list[str] = field(default_factory=list)
     role_bindings: dict[str, dict[str, list[str]]] = field(default_factory=dict)
     interlocks: list[dict[str, Any]] = field(default_factory=list)
     task_submodel_id: str = ""
@@ -65,10 +69,14 @@ class PolicyConfig:
         """Create PolicyConfig from dictionary."""
         sim_risk = data.get("require_simulation_for_risk", "HIGH")
         approval_risk = data.get("require_approval_for_risk", "CRITICAL")
+        approval_roles = data.get("approval_roles", [])
+        if isinstance(approval_roles, str):
+            approval_roles = [approval_roles]
 
         return cls(
             require_simulation_for_risk=RiskLevel(sim_risk),
             require_approval_for_risk=RiskLevel(approval_risk),
+            approval_roles=list(approval_roles),
             role_bindings=data.get("role_bindings", {}),
             interlocks=data.get("interlocks", []),
             task_submodel_id=data.get("task_submodel_id", ""),
@@ -116,15 +124,15 @@ class AuditLogger:
         content = json.dumps(data, sort_keys=True)
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
-    def _acquire_lock(self, file_obj) -> None:
+    def _acquire_lock(self, file_obj: Any) -> None:
         if self._lock_supported:
             fcntl.flock(file_obj.fileno(), fcntl.LOCK_EX)
 
-    def _release_lock(self, file_obj) -> None:
+    def _release_lock(self, file_obj: Any) -> None:
         if self._lock_supported:
             fcntl.flock(file_obj.fileno(), fcntl.LOCK_UN)
 
-    def _read_last_hash_locked(self, file_obj) -> str:
+    def _read_last_hash_locked(self, file_obj: Any) -> str:
         file_obj.seek(0)
         last_line = b""
         for line in file_obj:
@@ -136,7 +144,8 @@ class AuditLogger:
             entry = json.loads(last_line.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError):
             return ""
-        return entry.get("hash", "")
+        hash_value = entry.get("hash")
+        return hash_value if isinstance(hash_value, str) else ""
 
     def log(
         self,
@@ -200,7 +209,8 @@ class AuditLogger:
             finally:
                 self._release_lock(f)
 
-        self._prev_hash = entry["hash"]
+        hash_value = entry.get("hash")
+        self._prev_hash = hash_value if isinstance(hash_value, str) else ""
         logger.debug("Audit entry logged", audit_event=event, tool=tool)
 
     def verify_chain(self) -> tuple[bool, list[int]]:
@@ -268,6 +278,7 @@ class SafetyKernel:
         interlock_fail_safe: bool = True,
         policy_cache_ttl_seconds: int = 300,
         policy_max_age_seconds: float | None = None,
+        default_risk_level: RiskLevel = RiskLevel.MEDIUM,
     ):
         """
         Initialize safety kernel.
@@ -292,6 +303,7 @@ class SafetyKernel:
         self._policy_hash: str | None = None
         self._policy_cache_ttl_seconds = policy_cache_ttl_seconds
         self._policy_max_age_seconds = policy_max_age_seconds
+        self._default_risk_level = default_risk_level
 
     def _hash_policy(self, policy_json: str) -> str:
         return hashlib.sha256(policy_json.encode("utf-8")).hexdigest()
@@ -498,7 +510,7 @@ class SafetyKernel:
             )
 
         # Layer 3: Simulation forcing
-        risk = RiskLevel(tool_risk)
+        risk = self._resolve_risk(tool_risk)
         force_sim = self._should_force_simulation(risk, params, config)
 
         # Layer 4: Approval requirement
@@ -519,6 +531,18 @@ class SafetyKernel:
 
         return decision
 
+    def _resolve_risk(self, tool_risk: str) -> RiskLevel:
+        """Resolve tool risk to a known RiskLevel with safe fallback."""
+        try:
+            return RiskLevel(tool_risk)
+        except ValueError:
+            logger.warning(
+                "Unknown tool risk level, using default",
+                tool_risk=tool_risk,
+                default_risk=self._default_risk_level.value,
+            )
+            return self._default_risk_level
+
     def _check_rbac(
         self,
         tool_name: str,
@@ -538,6 +562,22 @@ class SafetyKernel:
                 return True
 
         return False
+
+    def _check_approval_roles(
+        self,
+        roles: tuple[str, ...],
+        config: PolicyConfig,
+    ) -> bool:
+        """Check if caller roles are authorized to approve/reject tasks."""
+        if not config.approval_roles:
+            logger.warning("No approval roles configured; denying approval")
+            return False
+        return bool(set(roles) & set(config.approval_roles))
+
+    async def is_approval_authorized(self, roles: tuple[str, ...]) -> bool:
+        """Check if roles are authorized for approvals using current policy."""
+        config = await self.load_policy()
+        return self._check_approval_roles(roles, config)
 
     async def _evaluate_interlocks(self, config: PolicyConfig) -> str | None:
         """
@@ -585,7 +625,10 @@ class SafetyKernel:
                 continue
 
             if self._violates(current, op, threshold):
-                return rule.get("message", f"Interlock {interlock_id} violated")
+                message = rule.get("message")
+                if isinstance(message, str):
+                    return message
+                return f"Interlock {interlock_id} violated"
 
         return None
 
@@ -620,10 +663,7 @@ class SafetyKernel:
             return False
 
         # Compare risk levels
-        return (
-            self.RISK_ORDER[risk]
-            >= self.RISK_ORDER[config.require_simulation_for_risk]
-        )
+        return self.RISK_ORDER[risk] >= self.RISK_ORDER[config.require_simulation_for_risk]
 
     def _should_require_approval(
         self,
@@ -631,10 +671,7 @@ class SafetyKernel:
         config: PolicyConfig,
     ) -> bool:
         """Check if human approval is required."""
-        return (
-            self.RISK_ORDER[risk]
-            >= self.RISK_ORDER[config.require_approval_for_risk]
-        )
+        return self.RISK_ORDER[risk] >= self.RISK_ORDER[config.require_approval_for_risk]
 
     async def create_approval_task(
         self,
@@ -731,10 +768,7 @@ class SafetyKernel:
             config.task_submodel_id,
             config.tasks_property_path,
         )
-        return [
-            task for task in tasks
-            if task.get("status") == TaskStatus.PENDING_APPROVAL.value
-        ]
+        return [task for task in tasks if task.get("status") == TaskStatus.PENDING_APPROVAL.value]
 
     async def get_task(self, task_id: str) -> dict[str, Any] | None:
         """
@@ -771,7 +805,12 @@ class SafetyKernel:
             config.tasks_property_path,
         )
 
-    async def approve_task(self, task_id: str, approver: str = "unknown") -> bool:
+    async def approve_task(
+        self,
+        task_id: str,
+        approver: str = "unknown",
+        roles: tuple[str, ...] = (),
+    ) -> bool:
         """
         Approve a pending task.
 
@@ -783,6 +822,15 @@ class SafetyKernel:
             True if task was approved, False if not found or not pending
         """
         config = await self.load_policy()
+        if not self._check_approval_roles(roles, config):
+            logger.warning(
+                "Approval denied - roles not authorized",
+                task_id=task_id,
+                roles=roles,
+                required_roles=config.approval_roles,
+            )
+            return False
+
         tasks = await self._twin_client.get_tasks(
             config.task_submodel_id,
             config.tasks_property_path,
@@ -801,6 +849,7 @@ class SafetyKernel:
                 task["status"] = TaskStatus.APPROVED.value
                 task["approved_by"] = approver
                 task["approved_at"] = time.time()
+                task["approved_by_roles"] = list(roles)
 
                 await self._twin_client.update_tasks(
                     config.task_submodel_id,
@@ -820,7 +869,11 @@ class SafetyKernel:
         return False
 
     async def reject_task(
-        self, task_id: str, rejector: str = "unknown", reason: str = ""
+        self,
+        task_id: str,
+        rejector: str = "unknown",
+        reason: str = "",
+        roles: tuple[str, ...] = (),
     ) -> bool:
         """
         Reject a pending task.
@@ -834,6 +887,15 @@ class SafetyKernel:
             True if task was rejected, False if not found or not pending
         """
         config = await self.load_policy()
+        if not self._check_approval_roles(roles, config):
+            logger.warning(
+                "Rejection denied - roles not authorized",
+                task_id=task_id,
+                roles=roles,
+                required_roles=config.approval_roles,
+            )
+            return False
+
         tasks = await self._twin_client.get_tasks(
             config.task_submodel_id,
             config.tasks_property_path,
@@ -853,6 +915,7 @@ class SafetyKernel:
                 task["rejected_by"] = rejector
                 task["rejected_at"] = time.time()
                 task["rejection_reason"] = reason
+                task["rejected_by_roles"] = list(roles)
 
                 await self._twin_client.update_tasks(
                     config.task_submodel_id,

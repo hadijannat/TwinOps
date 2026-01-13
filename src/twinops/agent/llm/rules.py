@@ -2,6 +2,7 @@
 
 import re
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 from twinops.agent.llm.base import LlmClient, LlmResponse, Message, ToolCall
@@ -84,32 +85,55 @@ class RulesBasedClient(LlmClient):
     """
 
     # Specific patterns for common operations
-    SPECIFIC_PATTERNS = [
+    SPECIFIC_PATTERNS: list[tuple[str, str, Callable[[re.Match[str]], dict[str, Any]]]] = [
         # Speed control
-        (r"set\s+(?:the\s+)?(?:pump\s+)?speed\s+(?:to\s+)?(\d+(?:\.\d+)?)", "SetSpeed", lambda m: {"RPM": float(m.group(1))}),
-        (r"change\s+(?:the\s+)?speed\s+(?:to\s+)?(\d+(?:\.\d+)?)", "SetSpeed", lambda m: {"RPM": float(m.group(1))}),
+        (
+            r"set\s+(?:the\s+)?(?:pump\s+)?speed\s+(?:to\s+)?(\d+(?:\.\d+)?)",
+            "SetSpeed",
+            lambda m: {"RPM": float(m.group(1))},
+        ),
+        (
+            r"change\s+(?:the\s+)?speed\s+(?:to\s+)?(\d+(?:\.\d+)?)",
+            "SetSpeed",
+            lambda m: {"RPM": float(m.group(1))},
+        ),
         (r"speed\s+(?:to\s+)?(\d+(?:\.\d+)?)", "SetSpeed", lambda m: {"RPM": float(m.group(1))}),
-
         # Pump control
         (r"(?:turn\s+on|start|activate|enable)\s+(?:the\s+)?pump", "StartPump", lambda _m: {}),
         (r"(?:turn\s+off|stop|deactivate|disable)\s+(?:the\s+)?pump", "StopPump", lambda _m: {}),
         (r"pump\s+(?:on|start)", "StartPump", lambda _m: {}),
         (r"pump\s+(?:off|stop)", "StopPump", lambda _m: {}),
-
         # Temperature control
-        (r"set\s+(?:the\s+)?temp(?:erature)?\s+(?:to\s+)?(\d+(?:\.\d+)?)", "SetTemperature", lambda m: {"Temperature": float(m.group(1))}),
-        (r"change\s+(?:the\s+)?temp(?:erature)?\s+(?:to\s+)?(\d+(?:\.\d+)?)", "SetTemperature", lambda m: {"Temperature": float(m.group(1))}),
-        (r"temp(?:erature)?\s+(?:to\s+)?(\d+(?:\.\d+)?)", "SetTemperature", lambda m: {"Temperature": float(m.group(1))}),
-
+        (
+            r"set\s+(?:the\s+)?temp(?:erature)?\s+(?:to\s+)?(\d+(?:\.\d+)?)",
+            "SetTemperature",
+            lambda m: {"Temperature": float(m.group(1))},
+        ),
+        (
+            r"change\s+(?:the\s+)?temp(?:erature)?\s+(?:to\s+)?(\d+(?:\.\d+)?)",
+            "SetTemperature",
+            lambda m: {"Temperature": float(m.group(1))},
+        ),
+        (
+            r"temp(?:erature)?\s+(?:to\s+)?(\d+(?:\.\d+)?)",
+            "SetTemperature",
+            lambda m: {"Temperature": float(m.group(1))},
+        ),
         # Status queries
-        (r"(?:get|show|check|display|what(?:'s|\s+is)?)\s+(?:the\s+)?(?:current\s+)?status", "GetStatus", lambda _m: {}),
+        (
+            r"(?:get|show|check|display|what(?:'s|\s+is)?)\s+(?:the\s+)?(?:current\s+)?status",
+            "GetStatus",
+            lambda _m: {},
+        ),
         (r"status\s+(?:report|check|info)", "GetStatus", lambda _m: {}),
         (r"how\s+(?:is|are)\s+(?:things|it)", "GetStatus", lambda _m: {}),
-
         # Temperature reading
-        (r"(?:read|get|show|what(?:'s|\s+is)?)\s+(?:the\s+)?(?:current\s+)?temp(?:erature)?", "ReadTemperature", lambda _m: {}),
+        (
+            r"(?:read|get|show|what(?:'s|\s+is)?)\s+(?:the\s+)?(?:current\s+)?temp(?:erature)?",
+            "ReadTemperature",
+            lambda _m: {},
+        ),
         (r"temp(?:erature)?\s+reading", "ReadTemperature", lambda _m: {}),
-
         # Emergency
         (r"emergency\s+(?:stop|shutdown|halt)", "EmergencyStop", lambda _m: {}),
         (r"e-stop|estop", "EmergencyStop", lambda _m: {}),
@@ -117,11 +141,14 @@ class RulesBasedClient(LlmClient):
     ]
 
     # Generic patterns for any tool
-    GENERIC_PATTERNS = [
+    GENERIC_PATTERNS: list[tuple[str, Callable[[re.Match[str]], tuple[str, dict[str, Any]]]]] = [
         # "call <operation>" or "run <operation>" or "execute <operation>"
         (r"(?:call|run|execute|invoke)\s+(\w+)", lambda m: (m.group(1), {})),
         # "set <property> to <value>"
-        (r"set\s+(\w+)\s+(?:to\s+)?(\d+(?:\.\d+)?)", lambda m: (f"Set{m.group(1).title()}", {m.group(1).title(): float(m.group(2))})),
+        (
+            r"set\s+(\w+)\s+(?:to\s+)?(\d+(?:\.\d+)?)",
+            lambda m: (f"Set{m.group(1).title()}", {m.group(1).title(): float(m.group(2))}),
+        ),
         # "get <property>" or "read <property>"
         (r"(?:get|read|show)\s+(\w+)", lambda m: (f"Read{m.group(1).title()}", {})),
     ]
@@ -190,30 +217,36 @@ class RulesBasedClient(LlmClient):
                     args["simulate"] = simulate
                     args["safety_reasoning"] = f"Matched specific pattern for {tool_name}"
 
-                    tool_calls.append(ToolCall(
-                        id=f"call_{uuid.uuid4().hex[:8]}",
-                        name=matched_tool,
-                        arguments=args,
-                    ))
+                    tool_calls.append(
+                        ToolCall(
+                            id=f"call_{uuid.uuid4().hex[:8]}",
+                            name=matched_tool,
+                            arguments=args,
+                        )
+                    )
                     break
 
         # If no specific pattern matched, try generic patterns
         if not tool_calls:
-            for pattern, extractor in self.GENERIC_PATTERNS:
+            for pattern, generic_extractor in self.GENERIC_PATTERNS:
                 match = re.search(pattern, normalized)
                 if match:
-                    tool_name, args = extractor(match)
+                    tool_name, args = generic_extractor(match)
                     # Try fuzzy matching for the extracted tool name
                     matched_tool = fuzzy_match_tool(tool_name, available_tools)
                     if matched_tool:
                         args["simulate"] = simulate
-                        args["safety_reasoning"] = f"Matched generic pattern, resolved to {matched_tool}"
+                        args["safety_reasoning"] = (
+                            f"Matched generic pattern, resolved to {matched_tool}"
+                        )
 
-                        tool_calls.append(ToolCall(
-                            id=f"call_{uuid.uuid4().hex[:8]}",
-                            name=matched_tool,
-                            arguments=args,
-                        ))
+                        tool_calls.append(
+                            ToolCall(
+                                id=f"call_{uuid.uuid4().hex[:8]}",
+                                name=matched_tool,
+                                arguments=args,
+                            )
+                        )
                         break
 
         if tool_calls:
@@ -227,7 +260,7 @@ class RulesBasedClient(LlmClient):
         available = ", ".join(sorted(available_tools.keys())) if available_tools else "none loaded"
         return LlmResponse(
             content=f"I couldn't understand that command. Available operations: {available}. "
-                    "Try commands like 'start pump', 'set speed to 1200', 'get status', or 'stop pump'.",
+            "Try commands like 'start pump', 'set speed to 1200', 'get status', or 'stop pump'.",
             finish_reason="stop",
         )
 

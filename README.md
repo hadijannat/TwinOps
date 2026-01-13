@@ -200,6 +200,7 @@ CovenantTwin embeds **cryptographically signed safety policies** directly within
 {
   "require_simulation_for_risk": "HIGH",
   "require_approval_for_risk": "CRITICAL",
+  "approval_roles": ["supervisor", "maintenance", "admin"],
   "role_bindings": {
     "operator": { "allow": ["StartPump", "StopPump", "SetSpeed"] },
     "viewer": { "allow": ["GetStatus"] },
@@ -219,6 +220,7 @@ CovenantTwin embeds **cryptographically signed safety policies** directly within
   ]
 }
 ```
+`approval_roles` controls which roles can approve or reject HITL tasks.
 
 ### 🔑 Signing Policies
 
@@ -334,6 +336,7 @@ Environment variables (prefix: `TWINOPS_`):
 | `AAS_ID` | `urn:example:aas:pump-001` | Target AAS identifier |
 | `REPO_ID` | `default` | Repository ID for MQTT topics |
 | `RATE_LIMIT_RPM` | `60` | Request rate limit (requests per minute) |
+| `DEFAULT_RISK_LEVEL` | `MEDIUM` | Fallback risk level when tool risk is unknown (`LOW` or `MEDIUM`) |
 | `AUTH_MODE` | `none` | API auth mode (`none` or `mtls`) |
 | `AUTH_EXEMPT_PATHS` | `["/health","/ready"]` | Paths exempt from auth (JSON array) |
 | `OPSERVICE_AUTH_MODE` | `none` | Opservice auth mode (`none` or `hmac`) |

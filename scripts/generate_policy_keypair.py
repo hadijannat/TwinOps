@@ -14,15 +14,9 @@ from twinops.agent.policy_signing import generate_keypair
 def main():
     parser = argparse.ArgumentParser(description="Generate Ed25519 key pair for policy signing")
     parser.add_argument(
-        "--output", "-o",
-        default="keys",
-        help="Output directory for keys (default: keys)"
+        "--output", "-o", default="keys", help="Output directory for keys (default: keys)"
     )
-    parser.add_argument(
-        "--force", "-f",
-        action="store_true",
-        help="Overwrite existing keys"
-    )
+    parser.add_argument("--force", "-f", action="store_true", help="Overwrite existing keys")
 
     args = parser.parse_args()
 

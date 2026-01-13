@@ -6,9 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import statistics
 import time
-from typing import List
 
 import aiohttp
 
@@ -19,8 +17,8 @@ async def _run_one(
     payload: dict,
     headers: dict,
     sem: asyncio.Semaphore,
-    latencies: List[float],
-    errors: List[int],
+    latencies: list[float],
+    errors: list[int],
 ) -> None:
     async with sem:
         start = time.perf_counter()
@@ -46,8 +44,8 @@ async def run_load_test(
     headers = {"Content-Type": "application/json", "X-Roles": role}
 
     sem = asyncio.Semaphore(concurrency)
-    latencies: List[float] = []
-    errors: List[int] = []
+    latencies: list[float] = []
+    errors: list[int] = []
 
     async with aiohttp.ClientSession(timeout=timeout) as session:
         tasks = [

@@ -6,6 +6,7 @@ import random
 import time
 from typing import Any
 
+from twinops.agent.twin_client import TwinClient, TwinClientError
 from twinops.common.basyx_topics import (
     EventType,
     ParsedTopic,
@@ -15,9 +16,8 @@ from twinops.common.basyx_topics import (
     parse_topic,
 )
 from twinops.common.logging import get_logger
-from twinops.common.mqtt import MqttClient, MqttMessage
-from twinops.agent.twin_client import TwinClient, TwinClientError
 from twinops.common.metrics import record_mqtt_event
+from twinops.common.mqtt import MqttClient, MqttMessage
 from twinops.common.settings import Settings
 from twinops.common.tracing import span
 
@@ -329,7 +329,7 @@ class ShadowTwinManager:
         path_parts = element_path.split("/")
         current = elements
 
-        for i, part in enumerate(path_parts[:-1]):
+        for _i, part in enumerate(path_parts[:-1]):
             found = False
             for elem in current:
                 if elem.get("idShort") == part:
@@ -356,7 +356,8 @@ class ShadowTwinManager:
     async def get_submodel(self, submodel_id: str) -> dict[str, Any] | None:
         """Get a submodel by ID."""
         async with self._lock:
-            return self._state["submodels"].get(submodel_id)
+            submodel = self._state["submodels"].get(submodel_id)
+            return dict(submodel) if isinstance(submodel, dict) else None
 
     async def get_all_submodels(self) -> dict[str, dict[str, Any]]:
         """Get all tracked submodels."""
@@ -440,19 +441,19 @@ class ShadowTwinManager:
             current_path = f"{path_prefix}/{id_short}" if path_prefix else id_short
 
             if model_type == "Operation":
-                operations.append({
-                    **elem,
-                    "_submodel_id": submodel_id,
-                    "_path": current_path,
-                })
+                operations.append(
+                    {
+                        **elem,
+                        "_submodel_id": submodel_id,
+                        "_path": current_path,
+                    }
+                )
 
             # Recurse into collections
             if model_type == "SubmodelElementCollection":
                 nested = elem.get("value", [])
                 if isinstance(nested, list):
-                    operations.extend(
-                        self._extract_operations(nested, submodel_id, current_path)
-                    )
+                    operations.extend(self._extract_operations(nested, submodel_id, current_path))
 
         return operations
 
@@ -495,7 +496,7 @@ class ShadowTwinManager:
                     return None
 
                 if part == path_parts[-1]:
-                    return found
+                    return dict(found) if isinstance(found, dict) else None
 
                 current = found.get("value", [])
                 if not isinstance(current, list):

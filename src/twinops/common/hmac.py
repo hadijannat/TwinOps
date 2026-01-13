@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import hmac
 import hashlib
+import hmac
 
 
 def build_message(timestamp: str, method: str, path: str, body: bytes) -> bytes:

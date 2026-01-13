@@ -240,6 +240,7 @@ def create_rate_limit_middleware(
     Returns:
         Configured middleware class
     """
+
     class ConfiguredRateLimitMiddleware(RateLimitMiddleware):
         def __init__(self, app: ASGIApp) -> None:
             super().__init__(

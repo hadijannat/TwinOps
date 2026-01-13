@@ -91,7 +91,7 @@
             {
               "type": "unit",
               "valueType": "xs:string",
-              "value": "°C"
+              "value": "\u00b0C"
             }
           ]
         },
@@ -129,7 +129,7 @@
             {
               "type": "unit",
               "valueType": "xs:string",
-              "value": "m³/h"
+              "value": "m\u00b3/h"
             }
           ]
         },
@@ -406,7 +406,7 @@
           "modelType": "Property",
           "idShort": "PolicyJson",
           "valueType": "xs:string",
-          "value": "{\"require_simulation_for_risk\": \"HIGH\", \"require_approval_for_risk\": \"CRITICAL\", \"role_bindings\": {\"operator\": {\"allow\": [\"StartPump\", \"StopPump\", \"SetSpeed\", \"GetStatus\"]}, \"viewer\": {\"allow\": [\"GetStatus\"]}, \"maintenance\": {\"allow\": [\"*\"]}}, \"interlocks\": [{\"id\": \"temp-high\", \"deny_when\": {\"submodel\": \"urn:example:submodel:operational\", \"path\": \"CurrentTemperature\", \"op\": \">\", \"value\": 95}, \"message\": \"Temperature too high to execute commands.\"}, {\"id\": \"discharge-closed\", \"deny_when\": {\"submodel\": \"urn:example:submodel:operational\", \"path\": \"DischargeValve/Position\", \"op\": \"==\", \"value\": \"CLOSED\"}, \"message\": \"Cannot start pump: discharge valve is closed\"}], \"task_submodel_id\": \"urn:example:submodel:control\", \"tasks_property_path\": \"TasksJson\", \"job_status_submodel_id\": \"urn:example:submodel:control\", \"job_status_property_path\": \"JobStatusJson\"}",
+          "value": "{\"approval_roles\":[\"supervisor\",\"maintenance\",\"admin\"],\"interlocks\":[{\"deny_when\":{\"op\":\">\",\"path\":\"CurrentTemperature\",\"submodel\":\"urn:example:submodel:operational\",\"value\":95},\"id\":\"temp-high\",\"message\":\"Temperature too high to execute commands.\"},{\"deny_when\":{\"op\":\"==\",\"path\":\"DischargeValve/Position\",\"submodel\":\"urn:example:submodel:operational\",\"value\":\"CLOSED\"},\"id\":\"discharge-closed\",\"message\":\"Cannot start pump: discharge valve is closed\"}],\"job_status_property_path\":\"JobStatusJson\",\"job_status_submodel_id\":\"urn:example:submodel:control\",\"require_approval_for_risk\":\"CRITICAL\",\"require_simulation_for_risk\":\"HIGH\",\"role_bindings\":{\"maintenance\":{\"allow\":[\"*\"]},\"operator\":{\"allow\":[\"StartPump\",\"StopPump\",\"SetSpeed\",\"GetStatus\"]},\"viewer\":{\"allow\":[\"GetStatus\"]}},\"task_submodel_id\":\"urn:example:submodel:control\",\"tasks_property_path\":\"TasksJson\"}",
           "description": [
             {
               "language": "en",
@@ -418,7 +418,7 @@
           "modelType": "Property",
           "idShort": "PolicyPublicKeyPem",
           "valueType": "xs:string",
-          "value": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAbDf+8kJucRZE7FglUf7rLsjZbrP/E4tdNqpasYMOMU4=\n-----END PUBLIC KEY-----\n",
+          "value": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAK6AQnJzUT57im4cxTIycx7ySQDflAkgXmhVxEHobdd8=\n-----END PUBLIC KEY-----\n",
           "description": [
             {
               "language": "en",
@@ -430,7 +430,7 @@
           "modelType": "Property",
           "idShort": "PolicySignature",
           "valueType": "xs:string",
-          "value": "fE0u2o17RHuEYmDeRfTEMgifODsxEhkhCQ157904PaEqidLkK9jPJNxQ8iOVNEeFsdql6l2yDKVPxPI5V+O5DA==",
+          "value": "KFNU/GuP7+fzo10YJ2SG6pFxyCe3iKO41NR9lx8QRQ3mWs/NIxQXRvjIRXm9popiFeGri0UUOVj+X6NnpSN5Dw==",
           "description": [
             {
               "language": "en",

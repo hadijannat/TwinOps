@@ -1,28 +1,25 @@
 """Sandbox AAS server for local development and testing."""
 
-import asyncio
-import base64
 import json
-import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
-import uvicorn
 
 from twinops.common.auth import AuthMiddleware
-from twinops.common.errors import ErrorCode, error_response
-from twinops.common.http import RequestIdMiddleware
 from twinops.common.basyx_topics import (
     append_trace_param,
     b64url_decode_nopad,
     b64url_encode_nopad,
 )
-from twinops.common.http import get_request_id
+from twinops.common.errors import ErrorCode, error_response
+from twinops.common.http import RequestIdMiddleware, get_request_id
 from twinops.common.logging import get_logger, setup_logging
 from twinops.common.metrics import MetricsMiddleware, metrics_endpoint
 from twinops.common.mqtt import MqttClient
@@ -107,7 +104,8 @@ class InMemoryAASRepository:
         shell = self._shells.get(shell_id)
         if not shell:
             return []
-        return shell.get("submodels", [])
+        submodels = shell.get("submodels", [])
+        return list(submodels) if isinstance(submodels, list) else []
 
     # === Submodel Operations ===
 
@@ -126,7 +124,9 @@ class InMemoryAASRepository:
         """Get all submodels."""
         return list(self._submodels.values())
 
-    async def update_submodel(self, submodel_id: str, submodel: dict[str, Any]) -> dict[str, Any] | None:
+    async def update_submodel(
+        self, submodel_id: str, submodel: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """Update a submodel."""
         if submodel_id not in self._submodels:
             return None
@@ -139,7 +139,9 @@ class InMemoryAASRepository:
         if submodel_id not in self._submodels:
             return False
         del self._submodels[submodel_id]
-        await self._publish_event("submodel-repository", submodel_id, "deleted", {"id": submodel_id})
+        await self._publish_event(
+            "submodel-repository", submodel_id, "deleted", {"id": submodel_id}
+        )
         return True
 
     # === SubmodelElement Operations ===
@@ -235,7 +237,7 @@ class InMemoryAASRepository:
 
     def load_from_file(self, path: str) -> None:
         """Load AAS environment from JSON file."""
-        with open(path, "r") as f:
+        with open(path) as f:
             data = json.load(f)
 
         # Load shells
@@ -295,13 +297,25 @@ class SandboxServer:
 
     # === HTTP Handlers ===
 
-    async def handle_get_shells(self, request: Request) -> JSONResponse:
+    async def handle_get_shells(self, _request: Request) -> JSONResponse:
         """GET /shells"""
+        if not self._repo:
+            return error_response(
+                ErrorCode.SERVER_NOT_READY,
+                "Repository not initialized",
+                status_code=503,
+            )
         shells = await self._repo.get_all_shells()
         return JSONResponse({"result": shells})
 
     async def handle_get_shell(self, request: Request) -> JSONResponse:
         """GET /shells/{aasId}"""
+        if not self._repo:
+            return error_response(
+                ErrorCode.SERVER_NOT_READY,
+                "Repository not initialized",
+                status_code=503,
+            )
         aas_id = self._decode_path_id(request.path_params["aas_id"])
         shell = await self._repo.get_shell(aas_id)
         if not shell:
@@ -310,17 +324,35 @@ class SandboxServer:
 
     async def handle_get_shell_refs(self, request: Request) -> JSONResponse:
         """GET /shells/{aasId}/submodel-refs"""
+        if not self._repo:
+            return error_response(
+                ErrorCode.SERVER_NOT_READY,
+                "Repository not initialized",
+                status_code=503,
+            )
         aas_id = self._decode_path_id(request.path_params["aas_id"])
         refs = await self._repo.get_shell_submodel_refs(aas_id)
         return JSONResponse({"result": refs})
 
-    async def handle_get_submodels(self, request: Request) -> JSONResponse:
+    async def handle_get_submodels(self, _request: Request) -> JSONResponse:
         """GET /submodels"""
+        if not self._repo:
+            return error_response(
+                ErrorCode.SERVER_NOT_READY,
+                "Repository not initialized",
+                status_code=503,
+            )
         submodels = await self._repo.get_all_submodels()
         return JSONResponse({"result": submodels})
 
     async def handle_get_submodel(self, request: Request) -> JSONResponse:
         """GET /submodels/{smId}"""
+        if not self._repo:
+            return error_response(
+                ErrorCode.SERVER_NOT_READY,
+                "Repository not initialized",
+                status_code=503,
+            )
         sm_id = self._decode_path_id(request.path_params["sm_id"])
         submodel = await self._repo.get_submodel(sm_id)
         if not submodel:
@@ -329,6 +361,12 @@ class SandboxServer:
 
     async def handle_get_element(self, request: Request) -> JSONResponse:
         """GET /submodels/{smId}/submodel-elements/{path}"""
+        if not self._repo:
+            return error_response(
+                ErrorCode.SERVER_NOT_READY,
+                "Repository not initialized",
+                status_code=503,
+            )
         sm_id = self._decode_path_id(request.path_params["sm_id"])
         path = request.path_params["path"]
         element = await self._repo.get_element(sm_id, path)
@@ -338,6 +376,12 @@ class SandboxServer:
 
     async def handle_get_value(self, request: Request) -> JSONResponse:
         """GET /submodels/{smId}/submodel-elements/{path}/$value"""
+        if not self._repo:
+            return error_response(
+                ErrorCode.SERVER_NOT_READY,
+                "Repository not initialized",
+                status_code=503,
+            )
         sm_id = self._decode_path_id(request.path_params["sm_id"])
         path = request.path_params["path"]
         value = await self._repo.get_element_value(sm_id, path)
@@ -345,6 +389,12 @@ class SandboxServer:
 
     async def handle_set_value(self, request: Request) -> Response:
         """PUT /submodels/{smId}/submodel-elements/{path}/$value"""
+        if not self._repo:
+            return error_response(
+                ErrorCode.SERVER_NOT_READY,
+                "Repository not initialized",
+                status_code=503,
+            )
         sm_id = self._decode_path_id(request.path_params["sm_id"])
         path = request.path_params["path"]
         value = await request.json()
@@ -352,7 +402,7 @@ class SandboxServer:
             return Response(status_code=204)
         return error_response(ErrorCode.NOT_FOUND, "Not found", status_code=404)
 
-    async def handle_health(self, request: Request) -> JSONResponse:
+    async def handle_health(self, _request: Request) -> JSONResponse:
         """Health check."""
         return JSONResponse({"status": "healthy"})
 
@@ -370,7 +420,7 @@ def create_app(settings: Settings | None = None) -> Starlette:
     server = SandboxServer(settings)
 
     @asynccontextmanager
-    async def lifespan(app: Starlette):
+    async def lifespan(_app: Starlette) -> AsyncIterator[None]:
         await server.startup()
         yield
         await server.shutdown()
@@ -380,14 +430,24 @@ def create_app(settings: Settings | None = None) -> Starlette:
         Route("/shells", server.handle_get_shells, methods=["GET"]),
         Route("/shells/{aas_id}", server.handle_get_shell, methods=["GET"]),
         Route("/shells/{aas_id}/submodel-refs", server.handle_get_shell_refs, methods=["GET"]),
-
         # Submodel Repository
         Route("/submodels", server.handle_get_submodels, methods=["GET"]),
         Route("/submodels/{sm_id}", server.handle_get_submodel, methods=["GET"]),
-        Route("/submodels/{sm_id}/submodel-elements/{path:path}", server.handle_get_element, methods=["GET"]),
-        Route("/submodels/{sm_id}/submodel-elements/{path:path}/$value", server.handle_get_value, methods=["GET"]),
-        Route("/submodels/{sm_id}/submodel-elements/{path:path}/$value", server.handle_set_value, methods=["PUT"]),
-
+        Route(
+            "/submodels/{sm_id}/submodel-elements/{path:path}",
+            server.handle_get_element,
+            methods=["GET"],
+        ),
+        Route(
+            "/submodels/{sm_id}/submodel-elements/{path:path}/$value",
+            server.handle_get_value,
+            methods=["GET"],
+        ),
+        Route(
+            "/submodels/{sm_id}/submodel-elements/{path:path}/$value",
+            server.handle_set_value,
+            methods=["PUT"],
+        ),
         # Health
         Route("/health", server.handle_health, methods=["GET"]),
         Route("/metrics", metrics_endpoint, methods=["GET"]),
@@ -410,7 +470,7 @@ def create_app(settings: Settings | None = None) -> Starlette:
     return app
 
 
-def main():
+def main() -> None:
     """Entry point for sandbox server."""
     setup_logging()
     settings = get_settings()

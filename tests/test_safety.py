@@ -221,6 +221,12 @@ class TestSafetyKernel:
         assert decision.require_approval is True
 
     @pytest.mark.asyncio
+    async def test_approval_roles_authorization(self, safety_kernel):
+        """Test approval authorization is policy-driven."""
+        assert await safety_kernel.is_approval_authorized(("admin",)) is True
+        assert await safety_kernel.is_approval_authorized(("viewer",)) is False
+
+    @pytest.mark.asyncio
     async def test_interlock_violation(self, safety_kernel):
         """Test interlock violation blocks operation."""
         # Set temperature above threshold

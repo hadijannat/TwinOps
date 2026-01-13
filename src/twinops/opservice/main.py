@@ -4,22 +4,22 @@ import asyncio
 import json
 import time
 import uuid
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from typing import Any
 
+import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
-import uvicorn
 
 from twinops.common.auth import AuthMiddleware, HmacAuthMiddleware
 from twinops.common.errors import ErrorCode, error_response
 from twinops.common.http import RequestIdMiddleware
 from twinops.common.logging import get_logger, setup_logging
 from twinops.common.metrics import MetricsMiddleware, metrics_endpoint
-from twinops.common.mqtt import MqttClient
 from twinops.common.ratelimit import RateLimitMiddleware
 from twinops.common.settings import Settings, get_settings
 from twinops.common.tracing import setup_tracing
@@ -46,7 +46,7 @@ class Job:
 class OperationExecutor:
     """Simulated operation executor."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize executor."""
         self._jobs: dict[str, Job] = {}
         self._state = {
@@ -124,7 +124,7 @@ class OperationExecutor:
             target_rpm = args.get("RPM", 0)
             current_rpm = self._state["pump_speed"]
             ramp_time = abs(target_rpm - current_rpm) / 500  # 500 RPM/s ramp rate
-            result["simulationResult"] = {
+            simulation_result = {
                 "predictedState": f"Running at {target_rpm} RPM",
                 "estimatedTime": ramp_time,
                 "currentSpeed": current_rpm,
@@ -132,7 +132,8 @@ class OperationExecutor:
                 "confidence": 0.92,
                 "warnings": ["High speed operation" if target_rpm > 3000 else None],
             }
-            result["simulationResult"]["warnings"] = [w for w in result["simulationResult"]["warnings"] if w]
+            simulation_result["warnings"] = [w for w in simulation_result["warnings"] if w]
+            result["simulationResult"] = simulation_result
 
         elif operation == "GetStatus":
             result["simulationResult"] = {
@@ -325,38 +326,42 @@ class OperationServer:
                 status_code=404,
             )
 
-        return JSONResponse({
-            "job_id": job.job_id,
-            "operation": job.operation,
-            "status": job.status,
-            "progress": job.progress,
-            "started_at": job.started_at,
-            "completed_at": job.completed_at,
-            "result": job.result,
-            "error": job.error,
-            "request_id": job.request_id,
-            "subject": job.subject,
-        })
+        return JSONResponse(
+            {
+                "job_id": job.job_id,
+                "operation": job.operation,
+                "status": job.status,
+                "progress": job.progress,
+                "started_at": job.started_at,
+                "completed_at": job.completed_at,
+                "result": job.result,
+                "error": job.error,
+                "request_id": job.request_id,
+                "subject": job.subject,
+            }
+        )
 
-    async def handle_list_jobs(self, request: Request) -> JSONResponse:
+    async def handle_list_jobs(self, _request: Request) -> JSONResponse:
         """List all jobs."""
         jobs = self._executor.get_all_jobs()
-        return JSONResponse({
-            "jobs": [
-                {
-                    "job_id": j.job_id,
-                    "operation": j.operation,
-                    "status": j.status,
-                    "progress": j.progress,
-                    "started_at": j.started_at,
-                    "request_id": j.request_id,
-                    "subject": j.subject,
-                }
-                for j in jobs
-            ]
-        })
+        return JSONResponse(
+            {
+                "jobs": [
+                    {
+                        "job_id": j.job_id,
+                        "operation": j.operation,
+                        "status": j.status,
+                        "progress": j.progress,
+                        "started_at": j.started_at,
+                        "request_id": j.request_id,
+                        "subject": j.subject,
+                    }
+                    for j in jobs
+                ]
+            }
+        )
 
-    async def handle_health(self, request: Request) -> JSONResponse:
+    async def handle_health(self, _request: Request) -> JSONResponse:
         """Health check."""
         return JSONResponse({"status": "healthy"})
 
@@ -367,7 +372,7 @@ def create_app(settings: Settings | None = None) -> Starlette:
     server = OperationServer(settings)
 
     @asynccontextmanager
-    async def lifespan(app: Starlette):
+    async def lifespan(_app: Starlette) -> AsyncIterator[None]:
         await server.startup()
         yield
         await server.shutdown()
@@ -398,7 +403,7 @@ def create_app(settings: Settings | None = None) -> Starlette:
     return app
 
 
-def main():
+def main() -> None:
     """Entry point for operation service."""
     setup_logging()
     settings = get_settings()

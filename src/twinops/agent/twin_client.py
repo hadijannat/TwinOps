@@ -1,21 +1,22 @@
 """HTTP client for AAS repository operations."""
 
-import json
-import time
 import asyncio
+import json
+import ssl
+import time
 from enum import Enum
-from typing import Any
+from types import TracebackType
+from typing import Any, cast
+from urllib.parse import quote, urlsplit
 
 import aiohttp
-from urllib.parse import quote, urlsplit
-import ssl
 
 from twinops.common.basyx_topics import b64url_encode_nopad
+from twinops.common.hmac import build_message, sign
+from twinops.common.http import get_request_id
 from twinops.common.logging import get_logger
 from twinops.common.settings import Settings
 from twinops.common.tracing import span
-from twinops.common.http import get_request_id
-from twinops.common.hmac import build_message, sign
 
 logger = get_logger(__name__)
 
@@ -147,8 +148,7 @@ class CircuitBreaker:
         """Raise exception if circuit is open."""
         if not self.can_execute():
             raise CircuitBreakerOpen(
-                f"Circuit breaker is {self.state.value}, "
-                f"retry after {self._recovery_timeout}s"
+                f"Circuit breaker is {self.state.value}, retry after {self._recovery_timeout}s"
             )
 
 
@@ -202,7 +202,9 @@ class TwinClient:
                 ssl_context.check_hostname = False
                 ssl_context.verify_mode = ssl.CERT_NONE
             if settings.twin_tls_client_cert and settings.twin_tls_client_key:
-                ssl_context.load_cert_chain(settings.twin_tls_client_cert, settings.twin_tls_client_key)
+                ssl_context.load_cert_chain(
+                    settings.twin_tls_client_cert, settings.twin_tls_client_key
+                )
             self._connector = aiohttp.TCPConnector(ssl=ssl_context)
 
     @property
@@ -215,7 +217,12 @@ class TwinClient:
         self._session = aiohttp.ClientSession(timeout=self._timeout, connector=self._connector)
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         """Exit async context."""
         if self._session:
             await self._session.close()
@@ -298,7 +305,8 @@ class TwinClient:
             if response.status != 200:
                 text = await response.text()
                 raise TwinClientError(f"Failed to get AAS: {text}", response.status)
-            return await response.json()
+            data = await response.json()
+            return cast(dict[str, Any], data)
 
     async def get_all_aas(self) -> list[dict[str, Any]]:
         """
@@ -316,7 +324,8 @@ class TwinClient:
                 raise TwinClientError(f"Failed to list AAS: {text}", response.status)
             data = await response.json()
             # BaSyx returns paged results
-            return data.get("result", data) if isinstance(data, dict) else data
+            result = data.get("result", data) if isinstance(data, dict) else data
+            return cast(list[dict[str, Any]], result)
 
     async def get_aas_submodel_refs(self, aas_id: str) -> list[dict[str, Any]]:
         """
@@ -337,7 +346,8 @@ class TwinClient:
                 text = await response.text()
                 raise TwinClientError(f"Failed to get submodel refs: {text}", response.status)
             data = await response.json()
-            return data.get("result", data) if isinstance(data, dict) else data
+            result = data.get("result", data) if isinstance(data, dict) else data
+            return cast(list[dict[str, Any]], result)
 
     # === Submodel Operations ===
 
@@ -363,7 +373,8 @@ class TwinClient:
             if response.status != 200:
                 text = await response.text()
                 raise TwinClientError(f"Failed to get submodel: {text}", response.status)
-            return await response.json()
+            data = await response.json()
+            return cast(dict[str, Any], data)
 
     async def get_submodel_element(
         self,
@@ -391,7 +402,8 @@ class TwinClient:
             if response.status != 200:
                 text = await response.text()
                 raise TwinClientError(f"Failed to get element: {text}", response.status)
-            return await response.json()
+            data = await response.json()
+            return cast(dict[str, Any], data)
 
     async def get_property_value(
         self,
@@ -475,7 +487,9 @@ class TwinClient:
 
         endpoint = "$invoke-async" if async_mode else "$invoke"
         encoded_path = quote(operation_path, safe="/")
-        url = f"{self._sm_base}/submodels/{sm_id_encoded}/submodel-elements/{encoded_path}/{endpoint}"
+        url = (
+            f"{self._sm_base}/submodels/{sm_id_encoded}/submodel-elements/{encoded_path}/{endpoint}"
+        )
 
         payload: dict[str, Any] = {
             "inputArguments": input_arguments,
@@ -500,7 +514,8 @@ class TwinClient:
             if response.status not in (200, 202):
                 text = await response.text()
                 raise TwinClientError(f"Operation failed: {text}", response.status)
-            return await response.json()
+            data = await response.json()
+            return cast(dict[str, Any], data)
 
     async def invoke_delegated_operation(
         self,
@@ -557,7 +572,8 @@ class TwinClient:
             if response.status not in (200, 202):
                 text = await response.text()
                 raise TwinClientError(f"Delegated operation failed: {text}", response.status)
-            return await response.json()
+            data = await response.json()
+            return cast(dict[str, Any], data)
 
     async def get_job_status(
         self,
@@ -602,7 +618,8 @@ class TwinClient:
             if response.status not in (200, 202):
                 text = await response.text()
                 raise TwinClientError(f"Failed to get job status: {text}", response.status)
-            return await response.json()
+            data = await response.json()
+            return cast(dict[str, Any], data)
 
     async def get_delegated_job_status(
         self,
@@ -641,8 +658,11 @@ class TwinClient:
                 raise TwinClientError(f"Job not found: {job_id}", response.status)
             if response.status not in (200, 202):
                 text = await response.text()
-                raise TwinClientError(f"Failed to get delegated job status: {text}", response.status)
-            return await response.json()
+                raise TwinClientError(
+                    f"Failed to get delegated job status: {text}", response.status
+                )
+            data = await response.json()
+            return cast(dict[str, Any], data)
 
     # === Batch Operations ===
 
@@ -663,17 +683,23 @@ class TwinClient:
         for ref in submodel_refs:
             # Extract submodel ID from reference
             keys = ref.get("keys", [])
-            if keys:
+            sm_id = ""
+            for key in keys:
+                if key.get("type") in ("Submodel", "GlobalReference"):
+                    sm_id = key.get("value", "")
+                    if sm_id:
+                        break
+            if not sm_id and keys:
                 sm_id = keys[0].get("value", "")
-                if sm_id:
-                    try:
-                        submodels[sm_id] = await self.get_submodel(sm_id)
-                    except TwinClientError as e:
-                        logger.warning(
-                            "Failed to fetch referenced submodel",
-                            submodel_id=sm_id,
-                            error=str(e),
-                        )
+            if sm_id:
+                try:
+                    submodels[sm_id] = await self.get_submodel(sm_id)
+                except TwinClientError as e:
+                    logger.warning(
+                        "Failed to fetch referenced submodel",
+                        submodel_id=sm_id,
+                        error=str(e),
+                    )
 
         return {
             "aas": aas,
@@ -696,7 +722,11 @@ class TwinClient:
         try:
             value = await self.get_property_value(submodel_id, property_path)
             data = json.loads(value) if isinstance(value, str) else value
-            return data.get("tasks", [])
+            if isinstance(data, dict):
+                tasks = data.get("tasks", [])
+                if isinstance(tasks, list):
+                    return cast(list[dict[str, Any]], tasks)
+            return []
         except TwinClientError:
             return []
 

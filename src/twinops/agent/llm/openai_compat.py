@@ -49,21 +49,25 @@ class AnthropicClient(LlmClient):
         for msg in messages:
             if msg.role == "system":
                 continue  # Handled separately
-            anthropic_messages.append({
-                "role": msg.role,
-                "content": msg.content,
-            })
+            anthropic_messages.append(
+                {
+                    "role": msg.role,
+                    "content": msg.content,
+                }
+            )
 
         # Convert tools to Anthropic format
         anthropic_tools = None
         if tools:
             anthropic_tools = []
             for t in tools:
-                anthropic_tools.append({
-                    "name": t["name"],
-                    "description": t.get("description", ""),
-                    "input_schema": t.get("input_schema", t.get("parameters", {})),
-                })
+                anthropic_tools.append(
+                    {
+                        "name": t["name"],
+                        "description": t.get("description", ""),
+                        "input_schema": t.get("input_schema", t.get("parameters", {})),
+                    }
+                )
 
         # Build request
         kwargs: dict[str, Any] = {
@@ -89,11 +93,13 @@ class AnthropicClient(LlmClient):
             if block.type == "text":
                 content = block.text
             elif block.type == "tool_use":
-                tool_calls.append(ToolCall(
-                    id=block.id,
-                    name=block.name,
-                    arguments=block.input if isinstance(block.input, dict) else {},
-                ))
+                tool_calls.append(
+                    ToolCall(
+                        id=block.id,
+                        name=block.name,
+                        arguments=block.input if isinstance(block.input, dict) else {},
+                    )
+                )
 
         return LlmResponse(
             content=content,
@@ -152,24 +158,28 @@ class OpenAIClient(LlmClient):
             openai_messages.append({"role": "system", "content": system})
 
         for msg in messages:
-            openai_messages.append({
-                "role": msg.role,
-                "content": msg.content,
-            })
+            openai_messages.append(
+                {
+                    "role": msg.role,
+                    "content": msg.content,
+                }
+            )
 
         # Convert tools to OpenAI format
         openai_tools = None
         if tools:
             openai_tools = []
             for t in tools:
-                openai_tools.append({
-                    "type": "function",
-                    "function": {
-                        "name": t["name"],
-                        "description": t.get("description", ""),
-                        "parameters": t.get("parameters", t.get("input_schema", {})),
-                    },
-                })
+                openai_tools.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": t["name"],
+                            "description": t.get("description", ""),
+                            "parameters": t.get("parameters", t.get("input_schema", {})),
+                        },
+                    }
+                )
 
         # Build request
         kwargs: dict[str, Any] = {
@@ -193,12 +203,22 @@ class OpenAIClient(LlmClient):
             for tc in choice.message.tool_calls:
                 args = tc.function.arguments
                 if isinstance(args, str):
-                    args = json.loads(args)
-                tool_calls.append(ToolCall(
-                    id=tc.id,
-                    name=tc.function.name,
-                    arguments=args,
-                ))
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        logger.warning(
+                            "Invalid tool arguments JSON from OpenAI",
+                            tool_name=tc.function.name,
+                            tool_call_id=tc.id,
+                        )
+                        args = {}
+                tool_calls.append(
+                    ToolCall(
+                        id=tc.id,
+                        name=tc.function.name,
+                        arguments=args,
+                    )
+                )
 
         usage = None
         if response.usage:

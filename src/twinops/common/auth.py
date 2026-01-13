@@ -6,8 +6,8 @@ import hashlib
 import re
 import ssl
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
@@ -79,19 +79,16 @@ def _extract_mtls_identity(request: Request, settings: Settings) -> tuple[str | 
     ssl_object = request.scope.get("ssl_object")
     if ssl_object:
         try:
-            cert = ssl_object.getpeercert()  # type: ignore[call-arg]
+            cert = ssl_object.getpeercert()
         except ssl.SSLError as exc:
             logger.warning("Failed to read peer certificate", error=str(exc))
             cert = None
 
-        if cert and cert.get("subject"):
-            subject = _format_subject(cert.get("subject", ()))
-        else:
-            subject = None
+        subject = _format_subject(cert.get("subject", ())) if cert and cert.get("subject") else None
 
         fingerprint = None
         try:
-            cert_bytes = ssl_object.getpeercert(binary_form=True)  # type: ignore[call-arg]
+            cert_bytes = ssl_object.getpeercert(binary_form=True)
             if cert_bytes:
                 fingerprint = hashlib.sha256(cert_bytes).hexdigest()
         except ssl.SSLError:
@@ -118,21 +115,26 @@ def authenticate_request(request: Request, settings: Settings) -> AuthContext:
     """Authenticate a request and return an AuthContext."""
     if settings.auth_mode == "none":
         roles_header = request.headers.get("X-Roles", "")
-        roles = _parse_roles(roles_header) or settings.default_roles
-        subject = request.headers.get("X-Subject", "anonymous")
-        return AuthContext(subject=subject, roles=roles, method="header")
+        header_roles = _parse_roles(roles_header) or settings.default_roles
+        header_subject = request.headers.get("X-Subject", "anonymous")
+        return AuthContext(subject=header_subject, roles=header_roles, method="header")
 
-    subject, fingerprint = _extract_mtls_identity(request, settings)
-    if not subject:
+    mtls_subject, fingerprint = _extract_mtls_identity(request, settings)
+    if not mtls_subject:
         raise AuthError(401, "Client certificate required")
 
-    roles = settings.mtls_role_map.get(subject, [])
-    if roles:
-        return AuthContext(subject=subject, roles=tuple(roles), method="mtls", fingerprint=fingerprint)
+    mapped_roles = settings.mtls_role_map.get(mtls_subject, [])
+    if mapped_roles:
+        return AuthContext(
+            subject=mtls_subject,
+            roles=tuple(mapped_roles),
+            method="mtls",
+            fingerprint=fingerprint,
+        )
 
     if settings.mtls_allow_unmapped:
         return AuthContext(
-            subject=subject,
+            subject=mtls_subject,
             roles=settings.default_roles,
             method="mtls",
             fingerprint=fingerprint,

@@ -1,6 +1,7 @@
 """Semantic capability index for tool retrieval."""
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -45,7 +46,8 @@ class CapabilityIndex:
             ngram_range=(1, 2),
             max_features=1000,
         )
-        self._matrix: np.ndarray | None = None
+        # TF-IDF sparse matrix (scipy sparse type); keep as Any for typing flexibility.
+        self._matrix: Any | None = None
         self._is_fitted = False
 
         if tools:
@@ -127,10 +129,12 @@ class CapabilityIndex:
         results = []
         for idx in indices:
             if scores[idx] > 0:
-                results.append(CapabilityHit(
-                    tool=self._tools[idx],
-                    score=float(scores[idx]),
-                ))
+                results.append(
+                    CapabilityHit(
+                        tool=self._tools[idx],
+                        score=float(scores[idx]),
+                    )
+                )
 
         return results
 

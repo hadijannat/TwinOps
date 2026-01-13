@@ -1,13 +1,14 @@
 """Agent Orchestrator - Tool execution loop with job monitoring."""
 
 import asyncio
-import json
-import time
-import random
 import hashlib
+import json
+import random
+import time
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from twinops.agent.capabilities import CapabilityIndex
 from twinops.agent.llm.base import LlmClient, Message
@@ -15,13 +16,13 @@ from twinops.agent.safety import SafetyKernel
 from twinops.agent.schema_gen import ToolSpec, tool_spec_to_llm_format
 from twinops.agent.shadow import ShadowTwinManager
 from twinops.agent.twin_client import TwinClient, TwinClientError
-from twinops.common.logging import get_logger
-from twinops.common.metrics import record_llm_call, record_job_result
-from twinops.common.tracing import span
 from twinops.common.http import get_request_id
 from twinops.common.idempotency import IdempotencyStore
 from twinops.common.idempotency_sqlite import SqliteIdempotencyStore
+from twinops.common.logging import get_logger
+from twinops.common.metrics import record_job_result, record_llm_call
 from twinops.common.settings import Settings
+from twinops.common.tracing import span
 
 logger = get_logger(__name__)
 
@@ -109,6 +110,7 @@ Be concise and focus on the task at hand."""
             if settings.llm_concurrency_limit
             else None
         )
+        self._idempotency: IdempotencyStore | SqliteIdempotencyStore
         if settings.tool_idempotency_storage == "sqlite":
             self._idempotency = SqliteIdempotencyStore(
                 settings.tool_idempotency_sqlite_path,
@@ -137,8 +139,8 @@ Be concise and focus on the task at hand."""
         """
         logger.info("Processing message", roles=roles)
 
-        # Add user message to conversation
-        self._conversation.append(Message(role="user", content=user_message))
+        # Per-request conversation (no shared state across callers)
+        conversation = [Message(role="user", content=user_message)]
 
         # Retrieve relevant tools
         tools = self._capabilities.search(user_message, top_k=self._settings.capability_top_k)
@@ -153,7 +155,7 @@ Be concise and focus on the task at hand."""
             with span("llm_call", {"llm.provider": self._settings.llm_provider}):
                 return await asyncio.wait_for(
                     self._llm.chat(
-                        messages=self._conversation,
+                        messages=conversation,
                         tools=tool_schemas,
                         system=self.SYSTEM_PROMPT,
                     ),
@@ -166,7 +168,7 @@ Be concise and focus on the task at hand."""
                     response = await _chat()
             else:
                 response = await _chat()
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.error(
                 "LLM request timed out",
                 timeout=self._settings.llm_request_timeout,
@@ -183,7 +185,6 @@ Be concise and focus on the task at hand."""
 
         # Handle text-only response
         if not response.tool_calls:
-            self._conversation.append(Message(role="assistant", content=response.content or ""))
             return AgentResponse(reply=response.content)
 
         # Execute tool calls
@@ -206,7 +207,6 @@ Be concise and focus on the task at hand."""
 
         # Build response message
         reply = self._build_reply(response.content, tool_results)
-        self._conversation.append(Message(role="assistant", content=reply))
 
         return AgentResponse(
             reply=reply,
@@ -279,8 +279,8 @@ Be concise and focus on the task at hand."""
                 action_id=action_id,
             )
 
-        # Force simulation if required
-        if decision.force_simulation and not params.get("simulate"):
+        # Force simulation for high risk or approval-required operations
+        if (decision.force_simulation or decision.require_approval) and not params.get("simulate"):
             logger.info("Forcing simulation", tool=tool_name, risk=tool.risk_level)
             params = {**params, "simulate": True}
 
@@ -298,6 +298,7 @@ Be concise and focus on the task at hand."""
                 return await self._invoke_operation(tool, params, action_id)
 
         try:
+
             async def _invoke_with_timeout() -> dict[str, Any]:
                 if self._tool_semaphore:
                     async with self._tool_semaphore:
@@ -323,11 +324,11 @@ Be concise and focus on the task at hand."""
             self._idempotency.set(idempotency_key, result_obj.__dict__)
             return result_obj
 
-        simulated = params.get("simulate", False)
+        simulated = bool(params.get("simulate", False))
         self._safety.log_execution(tool_name, tool.risk_level, roles, result, simulated, action_id)
 
-        # Check if approval is required (after simulation)
-        if decision.require_approval and not simulated:
+        # Check if approval is required (after simulation, if any)
+        if decision.require_approval:
             task_id = await self._safety.create_approval_task(
                 tool_name=tool_name,
                 tool_risk=tool.risk_level,
@@ -337,10 +338,13 @@ Be concise and focus on the task at hand."""
                 action_id=action_id,
             )
             record_outcome("approval_required", tool.risk_level)
+            result_payload: dict[str, Any] = {"message": "Awaiting human approval"}
+            if simulated:
+                result_payload["simulation_result"] = result
             result_obj = ToolResult(
                 tool_name=tool_name,
                 success=True,
-                result={"message": "Awaiting human approval"},
+                result=result_payload,
                 job_id=task_id,
                 status="pending_approval",
                 simulated=simulated,
@@ -407,10 +411,10 @@ Be concise and focus on the task at hand."""
 
     async def _invoke_with_retry(
         self,
-        tool: ToolSpec,
-        params: dict[str, Any],
-        action_id: str,
-        invoke_fn,
+        _tool: ToolSpec,
+        _params: dict[str, Any],
+        _action_id: str,
+        invoke_fn: Callable[[], Awaitable[dict[str, Any]]],
     ) -> dict[str, Any]:
         attempts = max(1, self._settings.tool_retry_max_attempts)
         delay = self._settings.tool_retry_base_delay
@@ -421,7 +425,11 @@ Be concise and focus on the task at hand."""
                 if not self._is_retryable_error(exc) or attempt == attempts:
                     raise
                 jitter = delay * self._settings.tool_retry_jitter
-                await asyncio.sleep(min(delay + random.uniform(-jitter, jitter), self._settings.tool_retry_max_delay))
+                await asyncio.sleep(
+                    min(
+                        delay + random.uniform(-jitter, jitter), self._settings.tool_retry_max_delay
+                    )
+                )
                 delay = min(delay * 2, self._settings.tool_retry_max_delay)
         return await invoke_fn()
 
@@ -436,7 +444,7 @@ Be concise and focus on the task at hand."""
         self,
         tool: ToolSpec,
         params: dict[str, Any],
-        action_id: str | None = None,
+        _action_id: str | None = None,
     ) -> dict[str, Any]:
         """
         Invoke an AAS operation.
@@ -450,10 +458,12 @@ Be concise and focus on the task at hand."""
         input_args = []
         for key, value in params.items():
             if key not in ("simulate", "safety_reasoning"):
-                input_args.append({
-                    "idShort": key,
-                    "value": value,
-                })
+                input_args.append(
+                    {
+                        "idShort": key,
+                        "value": value,
+                    }
+                )
 
         simulate = params.get("simulate", False)
 
@@ -538,7 +548,7 @@ Be concise and focus on the task at hand."""
                             status = job.get("status", "")
                             if status in ("COMPLETED", "FAILED", "CANCELLED"):
                                 record_job_result(status, "shadow")
-                                return job
+                                return cast(dict[str, Any], job)
                 else:
                     polls_without_update += 1
 
@@ -566,7 +576,9 @@ Be concise and focus on the task at hand."""
                             return {
                                 "job_id": job_id,
                                 "status": job_state,
-                                "result": http_status.get("outputArguments", http_status.get("result")),
+                                "result": http_status.get(
+                                    "outputArguments", http_status.get("result")
+                                ),
                                 "source": "http_fallback",
                             }
                     except Exception as e:
@@ -717,11 +729,13 @@ Be concise and focus on the task at hand."""
         if not task:
             return AgentResponse(
                 reply=f"Task {task_id} not found.",
-                tool_results=[ToolResult(
-                    tool_name="execute_task",
-                    success=False,
-                    error=f"Task {task_id} not found",
-                )],
+                tool_results=[
+                    ToolResult(
+                        tool_name="execute_task",
+                        success=False,
+                        error=f"Task {task_id} not found",
+                    )
+                ],
             )
 
         # Check task status
@@ -729,11 +743,13 @@ Be concise and focus on the task at hand."""
         if status != TaskStatus.APPROVED.value:
             return AgentResponse(
                 reply=f"Task {task_id} cannot be executed. Status: {status}",
-                tool_results=[ToolResult(
-                    tool_name="execute_task",
-                    success=False,
-                    error=f"Task status is {status}, expected Approved",
-                )],
+                tool_results=[
+                    ToolResult(
+                        tool_name="execute_task",
+                        success=False,
+                        error=f"Task status is {status}, expected Approved",
+                    )
+                ],
             )
 
         # Extract task details
@@ -745,11 +761,13 @@ Be concise and focus on the task at hand."""
         if not tool:
             return AgentResponse(
                 reply=f"Tool '{tool_name}' from task {task_id} not found.",
-                tool_results=[ToolResult(
-                    tool_name=tool_name,
-                    success=False,
-                    error=f"Tool not found: {tool_name}",
-                )],
+                tool_results=[
+                    ToolResult(
+                        tool_name=tool_name,
+                        success=False,
+                        error=f"Tool not found: {tool_name}",
+                    )
+                ],
             )
 
         # Verify roles (use original requesting roles or current roles)
@@ -757,11 +775,13 @@ Be concise and focus on the task at hand."""
         if not self._check_rbac(tool_name, original_roles, roles):
             return AgentResponse(
                 reply=f"Roles {roles} not authorized to execute task {task_id}.",
-                tool_results=[ToolResult(
-                    tool_name=tool_name,
-                    success=False,
-                    error=f"Unauthorized: roles {roles}",
-                )],
+                tool_results=[
+                    ToolResult(
+                        tool_name=tool_name,
+                        success=False,
+                        error=f"Unauthorized: roles {roles}",
+                    )
+                ],
             )
 
         # Execute the tool (skip approval check since already approved)
@@ -795,35 +815,41 @@ Be concise and focus on the task at hand."""
                 )
                 return AgentResponse(
                     reply=f"Task {task_id} executed successfully.",
-                    tool_results=[ToolResult(
-                        tool_name=tool_name,
-                        success=final_result.get("status") == "COMPLETED",
-                        result=final_result,
-                        job_id=job_id,
-                        action_id=action_id,
-                    )],
+                    tool_results=[
+                        ToolResult(
+                            tool_name=tool_name,
+                            success=final_result.get("status") == "COMPLETED",
+                            result=final_result,
+                            job_id=job_id,
+                            action_id=action_id,
+                        )
+                    ],
                 )
 
             return AgentResponse(
                 reply=f"Task {task_id} executed successfully.",
-                tool_results=[ToolResult(
-                    tool_name=tool_name,
-                    success=True,
-                    result=result,
-                    action_id=action_id,
-                )],
+                tool_results=[
+                    ToolResult(
+                        tool_name=tool_name,
+                        success=True,
+                        result=result,
+                        action_id=action_id,
+                    )
+                ],
             )
 
         except Exception as e:
             self._safety.log_error(tool_name, roles, str(e), action_id)
             return AgentResponse(
                 reply=f"Task {task_id} execution failed: {e}",
-                tool_results=[ToolResult(
-                    tool_name=tool_name,
-                    success=False,
-                    error=str(e),
-                    action_id=action_id,
-                )],
+                tool_results=[
+                    ToolResult(
+                        tool_name=tool_name,
+                        success=False,
+                        error=str(e),
+                        action_id=action_id,
+                    )
+                ],
             )
 
     def _check_rbac(
@@ -890,8 +916,16 @@ class AgentOrchestratorBuilder:
 
     def build(self) -> AgentOrchestrator:
         """Build the orchestrator."""
-        if not all([self._llm, self._shadow, self._twin, self._safety, self._capabilities]):
-            raise ValueError("All dependencies must be set before building")
+        if self._llm is None:
+            raise ValueError("LLM client must be set before building")
+        if self._shadow is None:
+            raise ValueError("Shadow twin must be set before building")
+        if self._twin is None:
+            raise ValueError("Twin client must be set before building")
+        if self._safety is None:
+            raise ValueError("Safety kernel must be set before building")
+        if self._capabilities is None:
+            raise ValueError("Capability index must be set before building")
 
         return AgentOrchestrator(
             llm=self._llm,

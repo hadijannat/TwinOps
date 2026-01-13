@@ -14,29 +14,15 @@ from twinops.agent.policy_signing import sign_policy, verify_policy_signature
 
 def main():
     parser = argparse.ArgumentParser(description="Sign a policy file")
+    parser.add_argument("--policy-file", "-p", required=True, help="Path to policy JSON file")
     parser.add_argument(
-        "--policy-file", "-p",
-        required=True,
-        help="Path to policy JSON file"
+        "--private-key", "-k", required=True, help="Path to Ed25519 private key PEM"
     )
+    parser.add_argument("--public-key", help="Path to Ed25519 public key PEM (for verification)")
     parser.add_argument(
-        "--private-key", "-k",
-        required=True,
-        help="Path to Ed25519 private key PEM"
+        "--output", "-o", help="Output file for signed policy (default: <policy-file>.signed.json)"
     )
-    parser.add_argument(
-        "--public-key",
-        help="Path to Ed25519 public key PEM (for verification)"
-    )
-    parser.add_argument(
-        "--output", "-o",
-        help="Output file for signed policy (default: <policy-file>.signed.json)"
-    )
-    parser.add_argument(
-        "--verify",
-        action="store_true",
-        help="Verify signature after signing"
-    )
+    parser.add_argument("--verify", action="store_true", help="Verify signature after signing")
 
     args = parser.parse_args()
 
@@ -58,7 +44,7 @@ def main():
     # Sign the policy
     signature = sign_policy(policy_json, private_pem)
 
-    print(f"Policy signed successfully")
+    print("Policy signed successfully")
     print(f"Signature: {signature[:32]}...")
 
     # Verify if requested
@@ -76,10 +62,7 @@ def main():
                 sys.exit(1)
 
     # Determine output path
-    if args.output:
-        output_path = Path(args.output)
-    else:
-        output_path = policy_path.with_suffix(".signed.json")
+    output_path = Path(args.output) if args.output else policy_path.with_suffix(".signed.json")
 
     # Write signed policy
     signed_output = {

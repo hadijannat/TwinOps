@@ -61,7 +61,6 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache: pip
 
       - name: Install dependencies
         run: |
@@ -142,14 +141,14 @@ jobs:
 
       - name: Upload coverage to Codecov (tokenless)
         uses: codecov/codecov-action@v5
-        if: !secrets.CODECOV_TOKEN
+        if: ${{ secrets.CODECOV_TOKEN == '' }}
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
 
       - name: Upload coverage to Codecov (token)
         uses: codecov/codecov-action@v5
-        if: secrets.CODECOV_TOKEN
+        if: ${{ secrets.CODECOV_TOKEN != '' }}
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage.xml

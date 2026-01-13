@@ -67,7 +67,12 @@ def extract_qualifier_value(
     qualifiers = element.get("qualifiers", [])
     for q in qualifiers:
         if q.get("type") == qualifier_type:
-            return q.get("value", default)
+            value = q.get("value", default)
+            if value is None:
+                return None
+            if isinstance(value, str):
+                return value
+            return str(value)
     return default
 
 
@@ -176,7 +181,8 @@ def build_collection_schema(collection: dict[str, Any]) -> dict[str, Any]:
             schema["properties"][id_short] = build_list_schema(elem)
 
         # Check if required
-        if extract_qualifier_value(elem, "required", "false").lower() == "true":
+        required_flag = extract_qualifier_value(elem, "required", "false") or "false"
+        if required_flag.lower() == "true":
             required.append(id_short)
 
     if required:
@@ -198,10 +204,7 @@ def build_list_schema(list_elem: dict[str, Any]) -> dict[str, Any]:
     elif item_type == "SubmodelElementCollection":
         # List of objects - infer from first value if available
         values = list_elem.get("value", [])
-        if values:
-            items_schema = build_collection_schema(values[0])
-        else:
-            items_schema = {"type": "object"}
+        items_schema = build_collection_schema(values[0]) if values else {"type": "object"}
     else:
         items_schema = {}
 

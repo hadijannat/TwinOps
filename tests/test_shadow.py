@@ -49,13 +49,14 @@ def mock_mqtt_client():
 
 
 @pytest.fixture
-def shadow_manager(mock_twin_client, mock_mqtt_client):
+def shadow_manager(mock_twin_client, mock_mqtt_client, settings):
     """Create shadow twin manager for testing."""
     return ShadowTwinManager(
         twin_client=mock_twin_client,
         mqtt_client=mock_mqtt_client,
         aas_id="urn:test:aas:001",
         aas_repo_id="test-repo",
+        settings=settings,
     )
 
 

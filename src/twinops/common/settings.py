@@ -226,6 +226,10 @@ class Settings(BaseSettings):
         default=("viewer",),
         description="Default roles when none specified",
     )
+    default_risk_level: Literal["LOW", "MEDIUM"] = Field(
+        default="MEDIUM",
+        description="Fallback risk level when tool risk is unknown",
+    )
     audit_log_path: str = Field(
         default="audit_logs/audit.jsonl",
         description="Path to the audit log file",

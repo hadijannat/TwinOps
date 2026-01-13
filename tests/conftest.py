@@ -109,6 +109,7 @@ def sample_policy() -> dict[str, Any]:
     return {
         "require_simulation_for_risk": "HIGH",
         "require_approval_for_risk": "CRITICAL",
+        "approval_roles": ["admin", "maintenance", "supervisor"],
         "role_bindings": {
             "operator": {"allow": ["SetSpeed", "GetStatus"]},
             "viewer": {"allow": ["GetStatus"]},
