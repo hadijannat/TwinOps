@@ -20,6 +20,7 @@ from twinops.common.metrics import record_llm_call, record_job_result
 from twinops.common.tracing import span
 from twinops.common.http import get_request_id
 from twinops.common.idempotency import IdempotencyStore
+from twinops.common.idempotency_sqlite import SqliteIdempotencyStore
 from twinops.common.settings import Settings
 
 logger = get_logger(__name__)
@@ -108,10 +109,16 @@ Be concise and focus on the task at hand."""
             if settings.llm_concurrency_limit
             else None
         )
-        self._idempotency = IdempotencyStore(
-            ttl_seconds=settings.tool_idempotency_ttl_seconds,
-            max_entries=settings.tool_idempotency_max_entries,
-        )
+        if settings.tool_idempotency_storage == "sqlite":
+            self._idempotency = SqliteIdempotencyStore(
+                settings.tool_idempotency_sqlite_path,
+                ttl_seconds=settings.tool_idempotency_ttl_seconds,
+            )
+        else:
+            self._idempotency = IdempotencyStore(
+                ttl_seconds=settings.tool_idempotency_ttl_seconds,
+                max_entries=settings.tool_idempotency_max_entries,
+            )
 
     async def process_message(
         self,

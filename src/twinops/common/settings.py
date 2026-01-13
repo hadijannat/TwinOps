@@ -344,6 +344,14 @@ class Settings(BaseSettings):
         default=1000,
         description="Max entries for tool idempotency cache",
     )
+    tool_idempotency_storage: Literal["memory", "sqlite"] = Field(
+        default="memory",
+        description="Storage backend for idempotency cache",
+    )
+    tool_idempotency_sqlite_path: str = Field(
+        default="data/idempotency.sqlite",
+        description="SQLite path for idempotency store",
+    )
 
     # Tracing
     tracing_enabled: bool = Field(

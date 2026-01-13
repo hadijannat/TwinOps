@@ -10,6 +10,7 @@ from twinops.common.basyx_topics import (
     ParsedTopic,
     RepositoryType,
     build_subscriptions_split,
+    extract_trace_param,
     parse_topic,
 )
 from twinops.common.logging import get_logger
@@ -182,7 +183,11 @@ class ShadowTwinManager:
 
     async def _handle_mqtt_message(self, message: MqttMessage) -> None:
         """Process incoming MQTT event."""
-        with span("shadow_mqtt_event", {"mqtt.topic": message.topic}):
+        trace_id = extract_trace_param(message.topic)
+        span_attrs = {"mqtt.topic": message.topic}
+        if trace_id:
+            span_attrs["trace_id"] = trace_id
+        with span("shadow_mqtt_event", span_attrs):
             parsed = parse_topic(message.topic)
             if not parsed:
                 return

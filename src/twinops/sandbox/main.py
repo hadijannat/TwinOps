@@ -16,7 +16,12 @@ import uvicorn
 
 from twinops.common.auth import AuthMiddleware
 from twinops.common.http import RequestIdMiddleware
-from twinops.common.basyx_topics import b64url_decode_nopad, b64url_encode_nopad
+from twinops.common.basyx_topics import (
+    append_trace_param,
+    b64url_decode_nopad,
+    b64url_encode_nopad,
+)
+from twinops.common.http import get_request_id
 from twinops.common.logging import get_logger, setup_logging
 from twinops.common.metrics import MetricsMiddleware, metrics_endpoint
 from twinops.common.mqtt import MqttClient
@@ -55,6 +60,9 @@ class InMemoryAASRepository:
             topic = f"{repo_type}/{self._repo_id}/{'shells' if 'aas' in repo_type else 'submodels'}/{event}"
 
         try:
+            request_id = get_request_id()
+            if request_id:
+                topic = append_trace_param(topic, request_id)
             await self._mqtt.publish(topic, json.dumps(payload))
             logger.debug("Published event", topic=topic)
         except Exception as e:

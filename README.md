@@ -359,6 +359,8 @@ Environment variables (prefix: `TWINOPS_`):
 | `TOOL_RETRY_JITTER` | `0.2` | Jitter ratio for retry backoff |
 | `TOOL_IDEMPOTENCY_TTL_SECONDS` | `300` | TTL for tool idempotency cache |
 | `TOOL_IDEMPOTENCY_MAX_ENTRIES` | `1000` | Max tool idempotency entries |
+| `TOOL_IDEMPOTENCY_STORAGE` | `memory` | Idempotency storage backend (`memory`/`sqlite`) |
+| `TOOL_IDEMPOTENCY_SQLITE_PATH` | `data/idempotency.sqlite` | SQLite path for idempotency |
 | `JOB_POLL_MAX_INTERVAL` | `5.0` | Max backoff for job polling |
 | `JOB_POLL_JITTER` | `0.1` | Jitter ratio for job polling |
 | `TWIN_CLIENT_FAILURE_THRESHOLD` | `5` | Circuit breaker failures before opening |
@@ -476,6 +478,17 @@ python scripts/load_test_agent.py --requests 50 --concurrency 5
 ```
 
 The `performance` GitHub Action runs the same script on demand.
+
+---
+
+## 🔁 Idempotency Store
+
+To share idempotency across multiple workers or processes:
+
+```bash
+export TWINOPS_TOOL_IDEMPOTENCY_STORAGE=sqlite
+export TWINOPS_TOOL_IDEMPOTENCY_SQLITE_PATH=data/idempotency.sqlite
+```
 
 ---
 

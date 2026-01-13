@@ -152,6 +152,7 @@ def parse_topic(topic: str) -> ParsedTopic | None:
     Returns:
         ParsedTopic or None if topic doesn't match expected format
     """
+    topic = topic.split("?", 1)[0]
     parts = topic.split("/")
     if len(parts) < 4:
         return None
@@ -206,6 +207,24 @@ def parse_topic(topic: str) -> ParsedTopic | None:
         entity_id=entity_id,
         element_path=element_path,
     )
+
+
+def append_trace_param(topic: str, trace_id: str) -> str:
+    """Append a trace_id as query param for non-breaking propagation."""
+    if "?" in topic:
+        return f"{topic}&trace_id={trace_id}"
+    return f"{topic}?trace_id={trace_id}"
+
+
+def extract_trace_param(topic: str) -> str | None:
+    """Extract trace_id query param if present."""
+    if "?" not in topic:
+        return None
+    query = topic.split("?", 1)[1]
+    for pair in query.split("&"):
+        if pair.startswith("trace_id="):
+            return pair.split("=", 1)[1] or None
+    return None
 
 
 def build_element_update_topic(
