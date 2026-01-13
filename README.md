@@ -278,13 +278,14 @@ graph TB
 
 ```bash
 # List pending approval tasks
-twinops --base-url http://localhost:8081 list-tasks
+twinops --agent-url http://localhost:8080 list-tasks
 
-# Approve a task
-twinops approve --task-id task-abc123
+# Approve a task (header auth mode)
+twinops --agent-url http://localhost:8080 approve --task-id task-abc123 --roles operator --approver "alice"
 
 # Reject a task
-twinops reject --task-id task-abc123 --reason "Maintenance window"
+twinops --agent-url http://localhost:8080 reject --task-id task-abc123 \
+  --reason "Maintenance window" --roles supervisor --rejector "bob"
 
 # Verify audit log integrity
 twinops verify-audit --log-path audit_logs/audit.jsonl

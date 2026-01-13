@@ -6,6 +6,7 @@ import sys
 from collections.abc import Callable, Coroutine
 from typing import Any, ParamSpec, TypeVar
 
+import aiohttp
 import click
 from rich.console import Console
 from rich.table import Table
@@ -36,33 +37,42 @@ def async_command(f: Callable[P, Coroutine[Any, Any, R]]) -> Callable[P, R]:
     default="http://localhost:8081",
     help="AAS repository base URL",
 )
+@click.option(
+    "--agent-url",
+    default="http://localhost:8080",
+    help="Agent API base URL",
+)
 @click.pass_context
-def cli(ctx: click.Context, base_url: str) -> None:
+def cli(ctx: click.Context, base_url: str, agent_url: str) -> None:
     """TwinOps CLI - Manage AI agent tasks and policies."""
     ctx.ensure_object(dict)
-    ctx.obj["base_url"] = base_url
+    ctx.obj["base_url"] = base_url.rstrip("/")
+    ctx.obj["agent_url"] = agent_url.rstrip("/")
 
 
 # === Task Management ===
 
 
 @cli.command("list-tasks")
-@click.option(
-    "--submodel-id", default="urn:example:submodel:control", help="Submodel ID containing tasks"
-)
-@click.option("--property-path", default="TasksJson", help="Path to TasksJson property")
 @click.pass_context
 @async_command
-async def list_tasks(ctx: click.Context, submodel_id: str, property_path: str) -> None:
+async def list_tasks(ctx: click.Context) -> None:
     """List pending approval tasks."""
-    settings = Settings(twin_base_url=ctx.obj["base_url"])
+    agent_url = ctx.obj["agent_url"]
 
-    async with TwinClient(settings) as client:
+    async with aiohttp.ClientSession() as session:
         try:
-            tasks = await client.get_tasks(submodel_id, property_path)
-        except TwinClientError as e:
-            console.print(f"[red]Error: {e}[/red]")
+            async with session.get(f"{agent_url}/tasks") as response:
+                if response.status != 200:
+                    detail = await response.text()
+                    console.print(f"[red]Error: {detail}[/red]")
+                    sys.exit(1)
+                payload = await response.json()
+        except aiohttp.ClientError as exc:
+            console.print(f"[red]Error: {exc}[/red]")
             sys.exit(1)
+
+    tasks = payload.get("tasks", [])
 
     if not tasks:
         console.print("[yellow]No pending tasks[/yellow]")
@@ -94,70 +104,100 @@ async def list_tasks(ctx: click.Context, submodel_id: str, property_path: str) -
 
 @cli.command("approve")
 @click.option("--task-id", required=True, help="Task ID to approve")
-@click.option("--submodel-id", default="urn:example:submodel:control", help="Submodel ID")
-@click.option("--property-path", default="TasksJson", help="Path to TasksJson")
+@click.option("--approver", help="Approver identity (for header auth mode)")
+@click.option("--roles", help="Comma-separated roles for approval authorization")
 @click.pass_context
 @async_command
 async def approve_task(
-    ctx: click.Context, task_id: str, submodel_id: str, property_path: str
+    ctx: click.Context,
+    task_id: str,
+    approver: str | None,
+    roles: str | None,
 ) -> None:
     """Approve a pending task."""
-    settings = Settings(twin_base_url=ctx.obj["base_url"])
+    agent_url = ctx.obj["agent_url"]
+    headers: dict[str, str] = {}
+    if roles:
+        headers["X-Roles"] = roles
+    payload: dict[str, Any] = {}
+    if approver:
+        payload["approver"] = approver
 
-    async with TwinClient(settings) as client:
+    async with aiohttp.ClientSession() as session:
         try:
-            success = await client.update_task_status(
-                submodel_id,
-                property_path,
-                task_id,
-                "Approved",
-            )
-        except TwinClientError as e:
-            console.print(f"[red]Error: {e}[/red]")
+            async with session.post(
+                f"{agent_url}/tasks/{task_id}/approve",
+                json=payload,
+                headers=headers,
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                elif response.status == 403:
+                    detail = await response.text()
+                    console.print(f"[red]Forbidden: {detail}[/red]")
+                    sys.exit(1)
+                elif response.status == 404:
+                    console.print(f"[red]Task {task_id} not found[/red]")
+                    sys.exit(1)
+                else:
+                    detail = await response.text()
+                    console.print(f"[red]Error: {detail}[/red]")
+                    sys.exit(1)
+        except aiohttp.ClientError as exc:
+            console.print(f"[red]Error: {exc}[/red]")
             sys.exit(1)
 
-    if success:
-        console.print(f"[green]Task {task_id} approved[/green]")
-    else:
-        console.print(f"[red]Task {task_id} not found[/red]")
-        sys.exit(1)
+    console.print(f"[green]Task {task_id} approved by {data.get('approved_by', 'unknown')}[/green]")
 
 
 @cli.command("reject")
 @click.option("--task-id", required=True, help="Task ID to reject")
 @click.option("--reason", default="Rejected by operator", help="Rejection reason")
-@click.option("--submodel-id", default="urn:example:submodel:control", help="Submodel ID")
-@click.option("--property-path", default="TasksJson", help="Path to TasksJson")
+@click.option("--rejector", help="Rejector identity (for header auth mode)")
+@click.option("--roles", help="Comma-separated roles for rejection authorization")
 @click.pass_context
 @async_command
 async def reject_task(
     ctx: click.Context,
     task_id: str,
     reason: str,
-    submodel_id: str,
-    property_path: str,
+    rejector: str | None,
+    roles: str | None,
 ) -> None:
     """Reject a pending task."""
-    settings = Settings(twin_base_url=ctx.obj["base_url"])
+    agent_url = ctx.obj["agent_url"]
+    headers: dict[str, str] = {}
+    if roles:
+        headers["X-Roles"] = roles
+    payload: dict[str, Any] = {"reason": reason}
+    if rejector:
+        payload["rejector"] = rejector
 
-    async with TwinClient(settings) as client:
+    async with aiohttp.ClientSession() as session:
         try:
-            success = await client.update_task_status(
-                submodel_id,
-                property_path,
-                task_id,
-                "Rejected",
-                reason=reason,
-            )
-        except TwinClientError as e:
-            console.print(f"[red]Error: {e}[/red]")
+            async with session.post(
+                f"{agent_url}/tasks/{task_id}/reject",
+                json=payload,
+                headers=headers,
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                elif response.status == 403:
+                    detail = await response.text()
+                    console.print(f"[red]Forbidden: {detail}[/red]")
+                    sys.exit(1)
+                elif response.status == 404:
+                    console.print(f"[red]Task {task_id} not found[/red]")
+                    sys.exit(1)
+                else:
+                    detail = await response.text()
+                    console.print(f"[red]Error: {detail}[/red]")
+                    sys.exit(1)
+        except aiohttp.ClientError as exc:
+            console.print(f"[red]Error: {exc}[/red]")
             sys.exit(1)
 
-    if success:
-        console.print(f"[green]Task {task_id} rejected: {reason}[/green]")
-    else:
-        console.print(f"[red]Task {task_id} not found[/red]")
-        sys.exit(1)
+    console.print(f"[green]Task {task_id} rejected by {data.get('rejected_by', 'unknown')}[/green]")
 
 
 # === Policy Management ===
