@@ -532,6 +532,26 @@ Reset conversation history.
 
 ---
 
+### Task API payloads
+
+Task list response:
+```json
+{
+  "tasks": [{"task_id": "task-1234abcd", "tool": "StartPump", "status": "pending_approval"}],
+  "count": 1
+}
+```
+
+Task execution response:
+```json
+{
+  "reply": "Task task-1234abcd executed successfully.",
+  "tool_results": [{"tool": "StartPump", "success": true, "status": "completed"}]
+}
+```
+
+---
+
 ### Error responses
 
 Errors use a consistent envelope:

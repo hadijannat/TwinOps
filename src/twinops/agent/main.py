@@ -980,7 +980,19 @@ class AgentServer:
                                                 },
                                                 "count": {"type": "integer"},
                                             },
-                                        }
+                                        },
+                                        "example": {
+                                            "tasks": [
+                                                {
+                                                    "task_id": "task-1234abcd",
+                                                    "tool": "StartPump",
+                                                    "risk": "high",
+                                                    "status": "pending_approval",
+                                                    "created_at": 1715614800.0,
+                                                }
+                                            ],
+                                            "count": 1,
+                                        },
                                     }
                                 },
                             },
@@ -1219,7 +1231,19 @@ class AgentServer:
                                             "properties": {
                                                 "task": {"$ref": "#/components/schemas/Task"},
                                             },
-                                        }
+                                        },
+                                        "example": {
+                                            "task": {
+                                                "task_id": "task-1234abcd",
+                                                "tool": "StartPump",
+                                                "risk": "high",
+                                                "status": "pending_approval",
+                                                "created_at": 1715614800.0,
+                                                "requested_by_roles": ["operator"],
+                                                "args": {"PumpId": "pump-001"},
+                                                "safety_reasoning": "Requires manual approval for high-risk action.",
+                                            }
+                                        },
                                     }
                                 },
                             },
@@ -1295,7 +1319,18 @@ class AgentServer:
                                                     "items": {"$ref": "#/components/schemas/ToolResult"},
                                                 },
                                             },
-                                        }
+                                        },
+                                        "example": {
+                                            "reply": "Task task-1234abcd executed successfully.",
+                                            "tool_results": [
+                                                {
+                                                    "tool": "StartPump",
+                                                    "success": True,
+                                                    "status": "completed",
+                                                    "job_id": "job-9f1a2b3c",
+                                                }
+                                            ],
+                                        },
                                     }
                                 },
                             },
