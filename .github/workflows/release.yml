@@ -75,6 +75,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-python-package
     environment: pypi
+    permissions:
+      id-token: write
 
     steps:
       - name: Download artifacts
@@ -83,7 +85,12 @@ jobs:
           name: python-package
           path: dist/
 
-      - name: Publish to PyPI
+      - name: Publish to PyPI (trusted publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        if: ${{ !secrets.PYPI_API_TOKEN }}
+
+      - name: Publish to PyPI (API token)
+        if: ${{ secrets.PYPI_API_TOKEN }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}

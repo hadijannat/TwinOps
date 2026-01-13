@@ -107,9 +107,16 @@ jobs:
           TWINOPS_MQTT_BROKER_HOST: localhost
           TWINOPS_MQTT_BROKER_PORT: 1883
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        if: matrix.python-version == '3.11'
+      - name: Upload coverage to Codecov (tokenless)
+        uses: codecov/codecov-action@v5
+        if: matrix.python-version == '3.11' && !secrets.CODECOV_TOKEN
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+
+      - name: Upload coverage to Codecov (token)
+        uses: codecov/codecov-action@v5
+        if: matrix.python-version == '3.11' && secrets.CODECOV_TOKEN
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage.xml
