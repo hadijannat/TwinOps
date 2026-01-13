@@ -233,6 +233,10 @@ python scripts/sign_policy.py \
   --output models/policy_signed.json
 ```
 
+Notes:
+- The sandbox sample policy in `models/sample_aas_env.json` is signed. If you change `PolicyJson`, regenerate a keypair and replace `PolicyPublicKeyPem` and `PolicySignature`.
+- Only the public key and signature are stored in the AAS; keep the private key outside the repo (the default `.gitignore` excludes `keys/` and `*.pem`).
+
 ---
 
 ## 🧩 Components
