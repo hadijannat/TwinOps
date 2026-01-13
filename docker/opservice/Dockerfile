@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 LABEL maintainer="RWTH Aachen University - Chair of Information and Automation Systems"
 LABEL description="TwinOps Operation Service"
