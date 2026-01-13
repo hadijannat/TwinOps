@@ -14,9 +14,13 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 import uvicorn
 
+from twinops.common.auth import AuthMiddleware
 from twinops.common.logging import get_logger, setup_logging
+from twinops.common.metrics import MetricsMiddleware, metrics_endpoint
 from twinops.common.mqtt import MqttClient
+from twinops.common.ratelimit import RateLimitMiddleware
 from twinops.common.settings import Settings, get_settings
+from twinops.common.tracing import setup_tracing
 
 logger = get_logger(__name__)
 
@@ -314,15 +318,35 @@ def create_app(settings: Settings | None = None) -> Starlette:
         Route("/jobs", server.handle_list_jobs, methods=["GET"]),
         Route("/jobs/{job_id}", server.handle_get_job, methods=["GET"]),
         Route("/health", server.handle_health, methods=["GET"]),
+        Route("/metrics", metrics_endpoint, methods=["GET"]),
     ]
 
-    return Starlette(routes=routes, lifespan=lifespan)
+    app = Starlette(routes=routes, lifespan=lifespan)
+
+    app.add_middleware(
+        RateLimitMiddleware,
+        requests_per_minute=settings.rate_limit_rpm,
+        exclude_paths=["/health", "/metrics"],
+    )
+    app.add_middleware(AuthMiddleware, settings=settings)
+    app.add_middleware(
+        MetricsMiddleware,
+        exclude_paths=["/health", "/metrics"],
+    )
+
+    return app
 
 
 def main():
     """Entry point for operation service."""
     setup_logging()
     settings = get_settings()
+    if settings.tracing_enabled or settings.tracing_otlp_endpoint or settings.tracing_console:
+        setup_tracing(
+            service_name=settings.tracing_service_name or "twinops-opservice",
+            otlp_endpoint=settings.tracing_otlp_endpoint,
+            enable_console=settings.tracing_console,
+        )
     app = create_app(settings)
 
     uvicorn.run(

@@ -14,6 +14,8 @@ from twinops.agent.schema_gen import ToolSpec, tool_spec_to_llm_format
 from twinops.agent.shadow import ShadowTwinManager
 from twinops.agent.twin_client import TwinClient
 from twinops.common.logging import get_logger
+from twinops.common.metrics import record_llm_call, record_job_result
+from twinops.common.tracing import span
 from twinops.common.settings import Settings
 
 logger = get_logger(__name__)
@@ -92,6 +94,16 @@ Be concise and focus on the task at hand."""
         self._capabilities = capability_index
         self._settings = settings
         self._conversation: list[Message] = []
+        self._tool_semaphore = (
+            asyncio.Semaphore(settings.tool_concurrency_limit)
+            if settings.tool_concurrency_limit
+            else None
+        )
+        self._llm_semaphore = (
+            asyncio.Semaphore(settings.llm_concurrency_limit)
+            if settings.llm_concurrency_limit
+            else None
+        )
 
     async def process_message(
         self,
@@ -120,11 +132,24 @@ Be concise and focus on the task at hand."""
         logger.debug("Retrieved tools", count=len(tools))
 
         # Get LLM response
-        response = await self._llm.chat(
-            messages=self._conversation,
-            tools=tool_schemas,
-            system=self.SYSTEM_PROMPT,
-        )
+        llm_start = time.perf_counter()
+        if self._llm_semaphore:
+            async with self._llm_semaphore:
+                with span("llm_call", {"llm.provider": self._settings.llm_provider}):
+                    response = await self._llm.chat(
+                        messages=self._conversation,
+                        tools=tool_schemas,
+                        system=self.SYSTEM_PROMPT,
+                    )
+        else:
+            with span("llm_call", {"llm.provider": self._settings.llm_provider}):
+                response = await self._llm.chat(
+                    messages=self._conversation,
+                    tools=tool_schemas,
+                    system=self.SYSTEM_PROMPT,
+                )
+
+        record_llm_call(self._settings.llm_provider, time.perf_counter() - llm_start)
 
         # Handle text-only response
         if not response.tool_calls:
@@ -226,8 +251,24 @@ Be concise and focus on the task at hand."""
             params = {**params, "simulate": True}
 
         # Execute (possibly in simulation)
+        async def _invoke() -> dict[str, Any]:
+            with span(
+                "tool_execute",
+                {
+                    "tool.name": tool_name,
+                    "tool.risk": tool.risk_level,
+                    "tool.simulated": params.get("simulate", False),
+                    "user.roles": ",".join(roles),
+                },
+            ):
+                return await self._invoke_operation(tool, params, action_id)
+
         try:
-            result = await self._invoke_operation(tool, params, action_id)
+            if self._tool_semaphore:
+                async with self._tool_semaphore:
+                    result = await _invoke()
+            else:
+                result = await _invoke()
         except Exception as e:
             self._safety.log_error(tool_name, roles, str(e), action_id)
             record_outcome("error", tool.risk_level)
@@ -403,6 +444,7 @@ Be concise and focus on the task at hand."""
                     if job.get("job_id") == job_id:
                         status = job.get("status", "")
                         if status in ("COMPLETED", "FAILED", "CANCELLED"):
+                            record_job_result(status, "shadow")
                             return job
             else:
                 polls_without_update += 1
@@ -427,6 +469,7 @@ Be concise and focus on the task at hand."""
                     # Check if complete
                     job_state = http_status.get("status") or http_status.get("executionState")
                     if job_state in ("COMPLETED", "FINISHED", "FAILED", "CANCELLED"):
+                        record_job_result(job_state, "http")
                         return {
                             "job_id": job_id,
                             "status": job_state,
@@ -444,6 +487,7 @@ Be concise and focus on the task at hand."""
 
             await asyncio.sleep(self._settings.job_poll_interval)
 
+        record_job_result("TIMEOUT", "shadow")
         return {"job_id": job_id, "status": "TIMEOUT"}
 
     def _build_reply(

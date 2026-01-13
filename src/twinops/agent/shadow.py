@@ -15,6 +15,8 @@ from twinops.common.basyx_topics import (
 from twinops.common.logging import get_logger
 from twinops.common.mqtt import MqttClient, MqttMessage
 from twinops.agent.twin_client import TwinClient, TwinClientError
+from twinops.common.metrics import record_mqtt_event
+from twinops.common.tracing import span
 
 logger = get_logger(__name__)
 
@@ -144,7 +146,8 @@ class ShadowTwinManager:
         """Fetch complete twin state via HTTP."""
         async with self._lock:
             try:
-                full_state = await self._twin_client.get_full_twin(self._aas_id)
+                with span("shadow_full_sync", {"aas.id": self._aas_id}):
+                    full_state = await self._twin_client.get_full_twin(self._aas_id)
                 self._state = full_state
                 sync_time = time.time()
                 self._last_sync_time = sync_time
@@ -179,32 +182,34 @@ class ShadowTwinManager:
 
     async def _handle_mqtt_message(self, message: MqttMessage) -> None:
         """Process incoming MQTT event."""
-        parsed = parse_topic(message.topic)
-        if not parsed:
-            return
-
-        # Only process events for our repositories (AAS or Submodel)
-        # Check the appropriate repo_id based on the repository type
-        if parsed.repository_type == RepositoryType.AAS:
-            if parsed.repo_id != self._aas_repo_id:
+        with span("shadow_mqtt_event", {"mqtt.topic": message.topic}):
+            parsed = parse_topic(message.topic)
+            if not parsed:
                 return
-        elif parsed.repository_type == RepositoryType.SUBMODEL:
-            if parsed.repo_id != self._submodel_repo_id:
+
+            # Only process events for our repositories (AAS or Submodel)
+            # Check the appropriate repo_id based on the repository type
+            if parsed.repository_type == RepositoryType.AAS:
+                if parsed.repo_id != self._aas_repo_id:
+                    return
+            elif parsed.repository_type == RepositoryType.SUBMODEL:
+                if parsed.repo_id != self._submodel_repo_id:
+                    return
+            else:
                 return
-        else:
-            return
 
-        self._event_count += 1
+            self._event_count += 1
+            record_mqtt_event(parsed.event_type.value)
 
-        try:
-            await self._apply_event(parsed, message.payload)
-        except Exception as e:
-            logger.warning(
-                "Failed to apply MQTT event, triggering resync",
-                topic=message.topic,
-                error=str(e),
-            )
-            await self._full_sync()
+            try:
+                await self._apply_event(parsed, message.payload)
+            except Exception as e:
+                logger.warning(
+                    "Failed to apply MQTT event, triggering resync",
+                    topic=message.topic,
+                    error=str(e),
+                )
+                await self._full_sync()
 
     async def _apply_event(self, parsed: ParsedTopic, payload: bytes) -> None:
         """Apply an MQTT event to the shadow state."""

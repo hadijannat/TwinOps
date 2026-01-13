@@ -258,6 +258,8 @@ class SafetyKernel:
         policy_submodel_id: str,
         require_policy_verification: bool = True,
         interlock_fail_safe: bool = True,
+        policy_cache_ttl_seconds: int = 300,
+        policy_max_age_seconds: float | None = None,
     ):
         """
         Initialize safety kernel.
@@ -278,6 +280,13 @@ class SafetyKernel:
         self._interlock_fail_safe = interlock_fail_safe
         self._cached_policy: PolicyConfig | None = None
         self._policy_load_time: float = 0
+        self._policy_loaded_at: float = 0
+        self._policy_hash: str | None = None
+        self._policy_cache_ttl_seconds = policy_cache_ttl_seconds
+        self._policy_max_age_seconds = policy_max_age_seconds
+
+    def _hash_policy(self, policy_json: str) -> str:
+        return hashlib.sha256(policy_json.encode("utf-8")).hexdigest()
 
     async def load_policy(self, force_reload: bool = False) -> PolicyConfig:
         """
@@ -290,12 +299,17 @@ class SafetyKernel:
             PolicyConfig object
         """
         # Use cache if fresh (5 minute TTL)
-        if (
-            not force_reload
-            and self._cached_policy
-            and time.time() - self._policy_load_time < 300
-        ):
-            return self._cached_policy
+        if not force_reload and self._cached_policy:
+            policy_age = time.time() - self._policy_loaded_at
+            if self._policy_max_age_seconds and policy_age > self._policy_max_age_seconds:
+                logger.warning(
+                    "Policy stale, forcing reload",
+                    age=round(policy_age, 1),
+                    max_age=self._policy_max_age_seconds,
+                )
+                force_reload = True
+            elif time.time() - self._policy_load_time < self._policy_cache_ttl_seconds:
+                return self._cached_policy
 
         submodel = await self._shadow.get_submodel(self._policy_submodel_id)
         if not submodel:
@@ -317,6 +331,15 @@ class SafetyKernel:
                 config.is_verified = signed.is_verified
                 self._cached_policy = config
                 self._policy_load_time = time.time()
+                self._policy_loaded_at = time.time()
+                self._policy_hash = self._hash_policy(signed.policy_json)
+
+                self._audit.log(
+                    event="policy_loaded",
+                    policy_hash=self._policy_hash,
+                    verified=config.is_verified,
+                    source="signed",
+                )
 
                 logger.info(
                     "Policy loaded",
@@ -339,6 +362,18 @@ class SafetyKernel:
                     config.is_verified = False
                     self._cached_policy = config
                     self._policy_load_time = time.time()
+                    self._policy_loaded_at = time.time()
+                    if isinstance(value, str):
+                        self._policy_hash = self._hash_policy(value)
+                    else:
+                        self._policy_hash = self._hash_policy(json.dumps(value, sort_keys=True))
+
+                    self._audit.log(
+                        event="policy_loaded",
+                        policy_hash=self._policy_hash,
+                        verified=False,
+                        source="unsigned",
+                    )
 
                     if self._require_verification:
                         logger.error("Unsigned policy rejected")
@@ -351,6 +386,13 @@ class SafetyKernel:
             raise PolicyVerificationError("Signed policy not found")
         self._cached_policy = PolicyConfig()
         self._policy_load_time = time.time()
+        self._policy_loaded_at = self._policy_load_time
+        self._policy_hash = None
+        self._audit.log(
+            event="policy_default",
+            verified=False,
+            source="default",
+        )
         return self._cached_policy
 
     async def evaluate(

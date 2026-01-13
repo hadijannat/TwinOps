@@ -28,6 +28,7 @@ from twinops.common.logging import get_logger, setup_logging
 from twinops.common.mqtt import MqttClient
 from twinops.common.ratelimit import RateLimitMiddleware
 from twinops.common.settings import Settings, get_settings
+from twinops.common.tracing import setup_tracing
 
 logger = get_logger(__name__)
 
@@ -319,6 +320,8 @@ class AgentServer:
             policy_submodel_id=self._settings.policy_submodel_id,
             require_policy_verification=self._settings.policy_verification_required,
             interlock_fail_safe=self._settings.interlock_fail_safe,
+            policy_cache_ttl_seconds=self._settings.policy_cache_ttl_seconds,
+            policy_max_age_seconds=self._settings.policy_max_age_seconds,
         )
 
         # Create LLM client
@@ -1129,16 +1132,16 @@ def create_app(settings: Settings | None = None) -> Starlette:
 
     app = Starlette(routes=routes, lifespan=lifespan)
 
-    app.add_middleware(
-        AuthMiddleware,
-        settings=settings,
-    )
-
     # Add rate limiting middleware
     app.add_middleware(
         RateLimitMiddleware,
         requests_per_minute=settings.rate_limit_rpm,
         exclude_paths=["/health", "/ready", "/metrics"],
+    )
+
+    app.add_middleware(
+        AuthMiddleware,
+        settings=settings,
     )
 
     app.add_middleware(
@@ -1170,6 +1173,12 @@ def main():
     """Entry point for agent server."""
     setup_logging()
     settings = get_settings()
+    if settings.tracing_enabled or settings.tracing_otlp_endpoint or settings.tracing_console:
+        setup_tracing(
+            service_name=settings.tracing_service_name or "twinops-agent",
+            otlp_endpoint=settings.tracing_otlp_endpoint,
+            enable_console=settings.tracing_console,
+        )
     workers = max(1, settings.agent_workers)
 
     if workers > 1 and not settings.metrics_multiprocess_dir:

@@ -172,6 +172,14 @@ class Settings(BaseSettings):
         default=True,
         description="Whether to require policy signature verification",
     )
+    policy_cache_ttl_seconds: int = Field(
+        default=300,
+        description="Seconds to cache a loaded policy before reloading",
+    )
+    policy_max_age_seconds: float | None = Field(
+        default=None,
+        description="Maximum policy age in seconds before forcing reload/deny",
+    )
     policy_submodel_id: str = Field(
         default="urn:example:submodel:policy",
         description="ID of the PolicyTwin submodel containing safety policies",
@@ -211,6 +219,46 @@ class Settings(BaseSettings):
     approval_timeout: float = Field(
         default=3600.0,
         description="Maximum time to wait for human approval",
+    )
+
+    # Resilience / concurrency
+    twin_client_failure_threshold: int = Field(
+        default=5,
+        description="Circuit breaker failures before opening",
+    )
+    twin_client_recovery_timeout: float = Field(
+        default=30.0,
+        description="Seconds before circuit breaker half-open",
+    )
+    twin_client_half_open_max_calls: int = Field(
+        default=3,
+        description="Successful calls to close half-open circuit",
+    )
+    tool_concurrency_limit: int | None = Field(
+        default=None,
+        description="Max concurrent tool executions (None = unlimited)",
+    )
+    llm_concurrency_limit: int | None = Field(
+        default=None,
+        description="Max concurrent LLM requests (None = unlimited)",
+    )
+
+    # Tracing
+    tracing_enabled: bool = Field(
+        default=False,
+        description="Enable OpenTelemetry tracing",
+    )
+    tracing_otlp_endpoint: str | None = Field(
+        default=None,
+        description="OTLP collector endpoint (e.g. http://localhost:4317)",
+    )
+    tracing_console: bool = Field(
+        default=False,
+        description="Emit traces to console (debug only)",
+    )
+    tracing_service_name: str | None = Field(
+        default=None,
+        description="Service name for tracing (defaults to service-specific)",
     )
 
     # Startup validation

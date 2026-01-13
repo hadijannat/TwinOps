@@ -11,6 +11,7 @@ from urllib.parse import quote
 from twinops.common.basyx_topics import b64url_encode_nopad
 from twinops.common.logging import get_logger
 from twinops.common.settings import Settings
+from twinops.common.tracing import span
 
 logger = get_logger(__name__)
 
@@ -161,7 +162,11 @@ class TwinClient:
         self._sm_base = (settings.submodel_base_url or settings.twin_base_url).rstrip("/")
         self._timeout = aiohttp.ClientTimeout(total=settings.http_timeout)
         self._session: aiohttp.ClientSession | None = None
-        self._circuit_breaker = circuit_breaker or CircuitBreaker()
+        self._circuit_breaker = circuit_breaker or CircuitBreaker(
+            failure_threshold=settings.twin_client_failure_threshold,
+            recovery_timeout=settings.twin_client_recovery_timeout,
+            half_open_max_calls=settings.twin_client_half_open_max_calls,
+        )
 
     @property
     def circuit_breaker(self) -> CircuitBreaker:
@@ -210,7 +215,8 @@ class TwinClient:
         session = self._ensure_session()
 
         try:
-            response = await session.request(method, url, **kwargs)
+            with span("twin_client_request", {"http.method": method, "http.url": url}):
+                response = await session.request(method, url, **kwargs)
             # Record success for 2xx and 4xx (client errors are not server failures)
             if response.status < 500:
                 self._circuit_breaker.record_success()

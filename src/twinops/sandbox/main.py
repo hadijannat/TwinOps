@@ -14,10 +14,14 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 import uvicorn
 
+from twinops.common.auth import AuthMiddleware
 from twinops.common.basyx_topics import b64url_decode_nopad, b64url_encode_nopad
 from twinops.common.logging import get_logger, setup_logging
+from twinops.common.metrics import MetricsMiddleware, metrics_endpoint
 from twinops.common.mqtt import MqttClient
+from twinops.common.ratelimit import RateLimitMiddleware
 from twinops.common.settings import Settings, get_settings
+from twinops.common.tracing import setup_tracing
 
 logger = get_logger(__name__)
 
@@ -370,15 +374,35 @@ def create_app(settings: Settings | None = None) -> Starlette:
 
         # Health
         Route("/health", server.handle_health, methods=["GET"]),
+        Route("/metrics", metrics_endpoint, methods=["GET"]),
     ]
 
-    return Starlette(routes=routes, lifespan=lifespan)
+    app = Starlette(routes=routes, lifespan=lifespan)
+
+    app.add_middleware(
+        RateLimitMiddleware,
+        requests_per_minute=settings.rate_limit_rpm,
+        exclude_paths=["/health", "/metrics"],
+    )
+    app.add_middleware(AuthMiddleware, settings=settings)
+    app.add_middleware(
+        MetricsMiddleware,
+        exclude_paths=["/health", "/metrics"],
+    )
+
+    return app
 
 
 def main():
     """Entry point for sandbox server."""
     setup_logging()
     settings = get_settings()
+    if settings.tracing_enabled or settings.tracing_otlp_endpoint or settings.tracing_console:
+        setup_tracing(
+            service_name=settings.tracing_service_name or "twinops-sandbox",
+            otlp_endpoint=settings.tracing_otlp_endpoint,
+            enable_console=settings.tracing_console,
+        )
     app = create_app(settings)
 
     uvicorn.run(

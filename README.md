@@ -336,6 +336,17 @@ Environment variables (prefix: `TWINOPS_`):
 | `MTLS_SUBJECT_HEADER` | `X-SSL-Client-DN` | Header carrying client subject |
 | `AGENT_WORKERS` | `1` | Uvicorn worker count for agent API |
 | `METRICS_MULTIPROC_DIR` | - | Directory for Prometheus multiprocess mode |
+| `TRACING_ENABLED` | `false` | Enable OpenTelemetry tracing |
+| `TRACING_OTLP_ENDPOINT` | - | OTLP collector endpoint |
+| `TRACING_CONSOLE` | `false` | Emit traces to console |
+| `TRACING_SERVICE_NAME` | - | Override service name for traces |
+| `TOOL_CONCURRENCY_LIMIT` | - | Max concurrent tool executions |
+| `LLM_CONCURRENCY_LIMIT` | - | Max concurrent LLM requests |
+| `TWIN_CLIENT_FAILURE_THRESHOLD` | `5` | Circuit breaker failures before opening |
+| `TWIN_CLIENT_RECOVERY_TIMEOUT` | `30` | Seconds before half-open |
+| `TWIN_CLIENT_HALF_OPEN_MAX_CALLS` | `3` | Successes required to close circuit |
+| `POLICY_CACHE_TTL_SECONDS` | `300` | Cache duration for safety policy |
+| `POLICY_MAX_AGE_SECONDS` | - | Maximum policy age before reload/deny |
 
 ---
 
@@ -363,6 +374,16 @@ export TWINOPS_METRICS_MULTIPROC_DIR=/tmp/twinops-prom
 
 - `/metrics` uses Prometheus multiprocess aggregation when `METRICS_MULTIPROC_DIR` is set.
 - If you want `/metrics` unauthenticated in mTLS mode, add it to `TWINOPS_AUTH_EXEMPT_PATHS`.
+
+---
+
+## 🧭 Tracing
+
+```bash
+export TWINOPS_TRACING_ENABLED=true
+export TWINOPS_TRACING_OTLP_ENDPOINT=http://localhost:4317
+export TWINOPS_TRACING_SERVICE_NAME=twinops-agent
+```
 
 ---
 

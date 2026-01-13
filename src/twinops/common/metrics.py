@@ -42,6 +42,12 @@ HTTP_REQUESTS_TOTAL = Counter(
     ["method", "endpoint", "status"],
 )
 
+JOB_RESULTS_TOTAL = Counter(
+    "twinops_job_results_total",
+    "Async job results",
+    ["status", "source"],  # source: shadow, http
+)
+
 CIRCUIT_BREAKER_TRANSITIONS = Counter(
     "twinops_circuit_breaker_transitions_total",
     "Circuit breaker state transitions",
@@ -157,6 +163,11 @@ def record_http_request(
         method=method,
         endpoint=endpoint,
     ).observe(latency)
+
+
+def record_job_result(status: str, source: str) -> None:
+    """Record an async job result."""
+    JOB_RESULTS_TOTAL.labels(status=status, source=source).inc()
 
 
 def update_shadow_freshness(seconds_since_update: float) -> None:
