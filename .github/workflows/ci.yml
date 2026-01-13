@@ -247,7 +247,7 @@ jobs:
       - name: Build images (load into Docker)
         run: |
           docker buildx build --load -f docker/agent/Dockerfile -t twinops-agent:ci \
-            --cache-from type=gha,scope=integration --cache-to type=gha,mode=min,scope=integration .
+            .
           docker buildx build --load -f docker/sandbox/Dockerfile -t twinops-sandbox:ci \
             --cache-from type=gha --cache-to type=gha,mode=max .
           docker buildx build --load -f docker/opservice/Dockerfile -t twinops-opservice:ci \
