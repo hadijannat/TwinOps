@@ -2,9 +2,12 @@
 
 import asyncio
 import json
+import ssl
 import sys
 from collections.abc import Callable, Coroutine
-from typing import Any, ParamSpec, TypeVar
+from pathlib import Path
+from typing import Any, ParamSpec, TypeVar, cast
+from urllib.parse import urlparse
 
 import aiohttp
 import click
@@ -15,6 +18,14 @@ from twinops.agent.policy_signing import generate_keypair, sign_policy, verify_p
 from twinops.agent.safety import AuditLogger
 from twinops.agent.twin_client import TwinClient, TwinClientError
 from twinops.common.settings import Settings
+
+tomllib: Any | None
+tomllib_module: Any | None = None
+try:
+    import tomllib as tomllib_module
+except ImportError:  # pragma: no cover - Python <3.11
+    tomllib_module = None
+tomllib = tomllib_module
 
 console = Console()
 
@@ -31,38 +42,125 @@ def async_command(f: Callable[P, Coroutine[Any, Any, R]]) -> Callable[P, R]:
     return wrapper
 
 
+def _load_config(path: str | None) -> dict[str, Any]:
+    if not path:
+        return {}
+    config_path = Path(path).expanduser()
+    if not config_path.exists():
+        console.print(f"[red]Config not found: {config_path}[/red]")
+        sys.exit(1)
+
+    raw = config_path.read_bytes()
+    if config_path.suffix.lower() == ".toml":
+        if tomllib is None:
+            console.print("[red]TOML config requires Python 3.11+[/red]")
+            sys.exit(1)
+        data = tomllib.loads(raw.decode("utf-8"))
+    else:
+        data = json.loads(raw.decode("utf-8"))
+
+    if isinstance(data, dict) and isinstance(data.get("cli"), dict):
+        return cast(dict[str, Any], data["cli"])
+    return cast(dict[str, Any], data) if isinstance(data, dict) else {}
+
+
+def _build_ssl_context(
+    agent_url: str,
+    client_cert: str | None,
+    client_key: str | None,
+    ca_cert: str | None,
+    insecure: bool,
+) -> ssl.SSLContext | None:
+    scheme = urlparse(agent_url).scheme
+    if scheme != "https":
+        if client_cert or client_key or ca_cert or insecure:
+            console.print("[yellow]mTLS options ignored for non-HTTPS agent_url[/yellow]")
+        return None
+
+    context = ssl.create_default_context(cafile=ca_cert or None)
+    if insecure:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    if client_cert and client_key:
+        context.load_cert_chain(client_cert, client_key)
+    return context
+
+
 @click.group()
 @click.option(
     "--base-url",
-    default="http://localhost:8081",
+    default=None,
     help="AAS repository base URL",
 )
 @click.option(
     "--agent-url",
-    default="http://localhost:8080",
+    default=None,
     help="Agent API base URL",
 )
+@click.option(
+    "--config",
+    type=click.Path(exists=False, dir_okay=False),
+    help="Path to CLI config (JSON or TOML with optional [cli] section)",
+)
+@click.option("--client-cert", help="Client certificate path (mTLS)")
+@click.option("--client-key", help="Client private key path (mTLS)")
+@click.option("--ca-cert", help="CA bundle path (mTLS)")
+@click.option("--insecure", is_flag=True, help="Disable TLS verification (testing only)")
 @click.pass_context
-def cli(ctx: click.Context, base_url: str, agent_url: str) -> None:
+def cli(
+    ctx: click.Context,
+    base_url: str | None,
+    agent_url: str | None,
+    config: str | None,
+    client_cert: str | None,
+    client_key: str | None,
+    ca_cert: str | None,
+    insecure: bool,
+) -> None:
     """TwinOps CLI - Manage AI agent tasks and policies."""
+    config_data = _load_config(config)
+    base_url = base_url or config_data.get("base_url") or "http://localhost:8081"
+    agent_url = agent_url or config_data.get("agent_url") or "http://localhost:8080"
+    client_cert = client_cert or config_data.get("client_cert")
+    client_key = client_key or config_data.get("client_key")
+    ca_cert = ca_cert or config_data.get("ca_cert")
+    insecure = bool(insecure or config_data.get("insecure", False))
+
     ctx.ensure_object(dict)
     ctx.obj["base_url"] = base_url.rstrip("/")
     ctx.obj["agent_url"] = agent_url.rstrip("/")
+    ctx.obj["roles"] = config_data.get("roles")
+    ctx.obj["approver"] = config_data.get("approver")
+    ctx.obj["rejector"] = config_data.get("rejector")
+    ctx.obj["ssl_context"] = _build_ssl_context(
+        ctx.obj["agent_url"],
+        client_cert,
+        client_key,
+        ca_cert,
+        insecure,
+    )
 
 
 # === Task Management ===
 
 
 @cli.command("list-tasks")
+@click.option("--roles", help="Comma-separated roles for authorization")
 @click.pass_context
 @async_command
-async def list_tasks(ctx: click.Context) -> None:
+async def list_tasks(ctx: click.Context, roles: str | None) -> None:
     """List pending approval tasks."""
     agent_url = ctx.obj["agent_url"]
+    ssl_context = ctx.obj.get("ssl_context")
+    headers: dict[str, str] = {}
+    roles = roles or ctx.obj.get("roles")
+    if roles:
+        headers["X-Roles"] = roles
 
-    async with aiohttp.ClientSession() as session:
+    connector = aiohttp.TCPConnector(ssl=ssl_context) if ssl_context else None
+    async with aiohttp.ClientSession(connector=connector) as session:
         try:
-            async with session.get(f"{agent_url}/tasks") as response:
+            async with session.get(f"{agent_url}/tasks", headers=headers) as response:
                 if response.status != 200:
                     detail = await response.text()
                     console.print(f"[red]Error: {detail}[/red]")
@@ -116,14 +214,18 @@ async def approve_task(
 ) -> None:
     """Approve a pending task."""
     agent_url = ctx.obj["agent_url"]
+    ssl_context = ctx.obj.get("ssl_context")
     headers: dict[str, str] = {}
+    roles = roles or ctx.obj.get("roles")
     if roles:
         headers["X-Roles"] = roles
     payload: dict[str, Any] = {}
+    approver = approver or ctx.obj.get("approver")
     if approver:
         payload["approver"] = approver
 
-    async with aiohttp.ClientSession() as session:
+    connector = aiohttp.TCPConnector(ssl=ssl_context) if ssl_context else None
+    async with aiohttp.ClientSession(connector=connector) as session:
         try:
             async with session.post(
                 f"{agent_url}/tasks/{task_id}/approve",
@@ -166,14 +268,18 @@ async def reject_task(
 ) -> None:
     """Reject a pending task."""
     agent_url = ctx.obj["agent_url"]
+    ssl_context = ctx.obj.get("ssl_context")
     headers: dict[str, str] = {}
+    roles = roles or ctx.obj.get("roles")
     if roles:
         headers["X-Roles"] = roles
     payload: dict[str, Any] = {"reason": reason}
+    rejector = rejector or ctx.obj.get("rejector")
     if rejector:
         payload["rejector"] = rejector
 
-    async with aiohttp.ClientSession() as session:
+    connector = aiohttp.TCPConnector(ssl=ssl_context) if ssl_context else None
+    async with aiohttp.ClientSession(connector=connector) as session:
         try:
             async with session.post(
                 f"{agent_url}/tasks/{task_id}/reject",

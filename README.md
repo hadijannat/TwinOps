@@ -281,11 +281,19 @@ graph TB
 twinops --agent-url http://localhost:8080 list-tasks
 
 # Approve a task (header auth mode)
-twinops --agent-url http://localhost:8080 approve --task-id task-abc123 --roles operator --approver "alice"
+twinops --agent-url http://localhost:8080 approve --task-id task-abc123 \
+  --roles operator --approver "alice"
 
 # Reject a task
 twinops --agent-url http://localhost:8080 reject --task-id task-abc123 \
   --reason "Maintenance window" --roles supervisor --rejector "bob"
+
+# mTLS client auth and config file usage
+twinops --agent-url https://localhost:8080 \
+  --client-cert certs/client.pem --client-key certs/client.key --ca-cert certs/ca.pem \
+  list-tasks
+
+twinops --config .twinops.toml approve --task-id task-abc123
 
 # Verify audit log integrity
 twinops verify-audit --log-path audit_logs/audit.jsonl
