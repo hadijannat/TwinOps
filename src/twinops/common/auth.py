@@ -5,19 +5,20 @@ from __future__ import annotations
 import hashlib
 import re
 import ssl
+import time
 from dataclasses import dataclass
 from typing import Iterable
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import Response
 from starlette.types import ASGIApp
 
+from twinops.common.errors import ErrorCode, error_response
+from twinops.common.hmac import build_message, verify
+from twinops.common.http import set_subject
 from twinops.common.logging import get_logger
 from twinops.common.settings import Settings
-from twinops.common.http import set_subject
-from twinops.common.hmac import build_message, verify
-import time
 
 logger = get_logger(__name__)
 
@@ -155,7 +156,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         try:
             auth = authenticate_request(request, self._settings)
         except AuthError as exc:
-            return JSONResponse({"error": exc.message}, status_code=exc.status_code)
+            code = ErrorCode.UNAUTHORIZED if exc.status_code == 401 else ErrorCode.FORBIDDEN
+            return error_response(code, exc.message, status_code=exc.status_code)
 
         request.state.auth = auth
         set_subject(auth.subject)
@@ -179,24 +181,37 @@ class HmacAuthMiddleware(BaseHTTPMiddleware):
 
         secret = self._settings.opservice_hmac_secret
         if not secret:
-            return JSONResponse(
-                {"error": "HMAC secret not configured"},
+            return error_response(
+                ErrorCode.SERVER_NOT_READY,
+                "HMAC secret not configured",
                 status_code=500,
             )
 
         signature = request.headers.get(self._settings.opservice_hmac_header)
         timestamp = request.headers.get(self._settings.opservice_hmac_timestamp_header)
         if not signature or not timestamp:
-            return JSONResponse({"error": "Missing HMAC headers"}, status_code=401)
+            return error_response(
+                ErrorCode.UNAUTHORIZED,
+                "Missing HMAC headers",
+                status_code=401,
+            )
 
         try:
             ts_value = int(timestamp)
         except ValueError:
-            return JSONResponse({"error": "Invalid HMAC timestamp"}, status_code=401)
+            return error_response(
+                ErrorCode.UNAUTHORIZED,
+                "Invalid HMAC timestamp",
+                status_code=401,
+            )
 
         now = int(time.time())
         if abs(now - ts_value) > self._settings.opservice_hmac_ttl_seconds:
-            return JSONResponse({"error": "HMAC timestamp expired"}, status_code=401)
+            return error_response(
+                ErrorCode.UNAUTHORIZED,
+                "HMAC timestamp expired",
+                status_code=401,
+            )
 
         path = request.url.path
         if request.url.query:
@@ -205,6 +220,10 @@ class HmacAuthMiddleware(BaseHTTPMiddleware):
         body = await request.body()
         message = build_message(timestamp, request.method, path, body)
         if not verify(secret, message, signature):
-            return JSONResponse({"error": "Invalid HMAC signature"}, status_code=401)
+            return error_response(
+                ErrorCode.UNAUTHORIZED,
+                "Invalid HMAC signature",
+                status_code=401,
+            )
 
         return await call_next(request)

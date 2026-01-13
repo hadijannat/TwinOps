@@ -15,6 +15,7 @@ from starlette.routing import Route
 import uvicorn
 
 from twinops.common.auth import AuthMiddleware, HmacAuthMiddleware
+from twinops.common.errors import ErrorCode, error_response
 from twinops.common.http import RequestIdMiddleware
 from twinops.common.logging import get_logger, setup_logging
 from twinops.common.metrics import MetricsMiddleware, metrics_endpoint
@@ -249,7 +250,11 @@ class OperationServer:
         try:
             body = await request.json()
         except json.JSONDecodeError:
-            return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+            return error_response(
+                ErrorCode.INVALID_JSON,
+                "Invalid JSON",
+                status_code=400,
+            )
 
         input_args = body.get("inputArguments", [])
         client_context = body.get("clientContext", {})
@@ -282,7 +287,11 @@ class OperationServer:
         job = self._executor.get_job(job_id)
 
         if not job:
-            return JSONResponse({"error": "Job not found"}, status_code=404)
+            return error_response(
+                ErrorCode.NOT_FOUND,
+                "Job not found",
+                status_code=404,
+            )
 
         return JSONResponse({
             "job_id": job.job_id,

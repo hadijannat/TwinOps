@@ -24,6 +24,7 @@ from twinops.agent.schema_gen import generate_all_tool_schemas
 from twinops.agent.shadow import ShadowTwinManager
 from twinops.agent.twin_client import TwinClient, TwinClientError
 from twinops.common.auth import AuthMiddleware
+from twinops.common.errors import ErrorCode, error_response
 from twinops.common.http import RequestIdMiddleware
 from twinops.common.logging import get_logger, setup_logging
 from twinops.common.mqtt import MqttClient
@@ -383,14 +384,16 @@ class AgentServer:
         """Handle chat endpoint."""
         # Reject requests during shutdown
         if self._shutdown.is_shutting_down:
-            return JSONResponse(
-                {"error": "Server is shutting down"},
+            return error_response(
+                ErrorCode.SERVER_SHUTTING_DOWN,
+                "Server is shutting down",
                 status_code=503,
             )
 
         if not self._orchestrator:
-            return JSONResponse(
-                {"error": "Server not initialized"},
+            return error_response(
+                ErrorCode.SERVER_NOT_READY,
+                "Server not initialized",
                 status_code=503,
             )
 
@@ -399,16 +402,19 @@ class AgentServer:
             try:
                 body = await request.json()
             except json.JSONDecodeError:
-                return JSONResponse(
-                    {"error": "Invalid JSON"},
+                return error_response(
+                    ErrorCode.INVALID_JSON,
+                    "Invalid JSON",
                     status_code=400,
                 )
 
             message = body.get("message", "")
             if not message:
-                return JSONResponse(
-                    {"error": "Missing 'message' field"},
+                return error_response(
+                    ErrorCode.MISSING_FIELD,
+                    "Missing 'message' field",
                     status_code=400,
+                    details={"field": "message"},
                 )
 
             roles = self._get_roles(request)
@@ -521,8 +527,9 @@ class AgentServer:
         Returns list of tasks awaiting human approval.
         """
         if not self._safety:
-            return JSONResponse(
-                {"error": "Server not initialized"},
+            return error_response(
+                ErrorCode.SERVER_NOT_READY,
+                "Server not initialized",
                 status_code=503,
             )
 
@@ -534,8 +541,9 @@ class AgentServer:
             })
         except Exception as e:
             logger.error("Failed to list tasks", error=str(e))
-            return JSONResponse(
-                {"error": "Failed to retrieve tasks"},
+            return error_response(
+                ErrorCode.OP_FAILED,
+                "Failed to retrieve tasks",
                 status_code=500,
             )
 
@@ -546,16 +554,19 @@ class AgentServer:
         Requires task_id in URL path. Optionally accepts approver in body.
         """
         if not self._safety:
-            return JSONResponse(
-                {"error": "Server not initialized"},
+            return error_response(
+                ErrorCode.SERVER_NOT_READY,
+                "Server not initialized",
                 status_code=503,
             )
 
         task_id = request.path_params.get("task_id", "")
         if not task_id:
-            return JSONResponse(
-                {"error": "Missing task_id"},
+            return error_response(
+                ErrorCode.MISSING_FIELD,
+                "Missing task_id",
                 status_code=400,
+                details={"field": "task_id"},
             )
 
         approver = "unknown"
@@ -577,14 +588,16 @@ class AgentServer:
                     "approved_by": approver,
                 })
             else:
-                return JSONResponse(
-                    {"error": "Task not found or not in pending state"},
+                return error_response(
+                    ErrorCode.NOT_FOUND,
+                    "Task not found or not in pending state",
                     status_code=404,
                 )
         except Exception as e:
             logger.error("Failed to approve task", task_id=task_id, error=str(e))
-            return JSONResponse(
-                {"error": "Failed to approve task"},
+            return error_response(
+                ErrorCode.OP_FAILED,
+                "Failed to approve task",
                 status_code=500,
             )
 
@@ -595,16 +608,19 @@ class AgentServer:
         Requires task_id in URL path. Optionally accepts rejector and reason in body.
         """
         if not self._safety:
-            return JSONResponse(
-                {"error": "Server not initialized"},
+            return error_response(
+                ErrorCode.SERVER_NOT_READY,
+                "Server not initialized",
                 status_code=503,
             )
 
         task_id = request.path_params.get("task_id", "")
         if not task_id:
-            return JSONResponse(
-                {"error": "Missing task_id"},
+            return error_response(
+                ErrorCode.MISSING_FIELD,
+                "Missing task_id",
                 status_code=400,
+                details={"field": "task_id"},
             )
 
         rejector = "unknown"
@@ -629,14 +645,16 @@ class AgentServer:
                     "reason": reason,
                 })
             else:
-                return JSONResponse(
-                    {"error": "Task not found or not in pending state"},
+                return error_response(
+                    ErrorCode.NOT_FOUND,
+                    "Task not found or not in pending state",
                     status_code=404,
                 )
         except Exception as e:
             logger.error("Failed to reject task", task_id=task_id, error=str(e))
-            return JSONResponse(
-                {"error": "Failed to reject task"},
+            return error_response(
+                ErrorCode.OP_FAILED,
+                "Failed to reject task",
                 status_code=500,
             )
 
@@ -647,16 +665,19 @@ class AgentServer:
         Returns full task information including status, tool, args, etc.
         """
         if not self._safety:
-            return JSONResponse(
-                {"error": "Server not initialized"},
+            return error_response(
+                ErrorCode.SERVER_NOT_READY,
+                "Server not initialized",
                 status_code=503,
             )
 
         task_id = request.path_params.get("task_id", "")
         if not task_id:
-            return JSONResponse(
-                {"error": "Missing task_id"},
+            return error_response(
+                ErrorCode.MISSING_FIELD,
+                "Missing task_id",
                 status_code=400,
+                details={"field": "task_id"},
             )
 
         try:
@@ -664,14 +685,16 @@ class AgentServer:
             if task:
                 return JSONResponse({"task": task})
             else:
-                return JSONResponse(
-                    {"error": "Task not found"},
+                return error_response(
+                    ErrorCode.NOT_FOUND,
+                    "Task not found",
                     status_code=404,
                 )
         except Exception as e:
             logger.error("Failed to get task", task_id=task_id, error=str(e))
-            return JSONResponse(
-                {"error": "Failed to retrieve task"},
+            return error_response(
+                ErrorCode.OP_FAILED,
+                "Failed to retrieve task",
                 status_code=500,
             )
 
@@ -683,16 +706,19 @@ class AgentServer:
         Useful for executing tasks after agent restart or asynchronous approval.
         """
         if not self._orchestrator:
-            return JSONResponse(
-                {"error": "Server not initialized"},
+            return error_response(
+                ErrorCode.SERVER_NOT_READY,
+                "Server not initialized",
                 status_code=503,
             )
 
         task_id = request.path_params.get("task_id", "")
         if not task_id:
-            return JSONResponse(
-                {"error": "Missing task_id"},
+            return error_response(
+                ErrorCode.MISSING_FIELD,
+                "Missing task_id",
                 status_code=400,
+                details={"field": "task_id"},
             )
 
         roles = self._get_roles(request)
@@ -717,8 +743,9 @@ class AgentServer:
             })
         except Exception as e:
             logger.error("Failed to execute task", task_id=task_id, error=str(e))
-            return JSONResponse(
-                {"error": "Failed to execute task"},
+            return error_response(
+                ErrorCode.OP_FAILED,
+                "Failed to execute task",
                 status_code=500,
             )
         finally:

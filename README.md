@@ -530,6 +530,24 @@ Reset conversation history.
 
 ---
 
+### Error responses
+
+Errors use a consistent envelope:
+
+```json
+{
+  "error": {
+    "code": "missing_field",
+    "message": "Missing 'message' field",
+    "details": {"field": "message"}
+  }
+}
+```
+
+Common codes include `invalid_json`, `missing_field`, `not_found`, `unauthorized`, `forbidden`, and `operation_failed`.
+
+---
+
 ## 🛠️ Development
 
 ### Local Setup

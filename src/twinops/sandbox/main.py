@@ -15,6 +15,7 @@ from starlette.routing import Route
 import uvicorn
 
 from twinops.common.auth import AuthMiddleware
+from twinops.common.errors import ErrorCode, error_response
 from twinops.common.http import RequestIdMiddleware
 from twinops.common.basyx_topics import (
     append_trace_param,
@@ -304,7 +305,7 @@ class SandboxServer:
         aas_id = self._decode_path_id(request.path_params["aas_id"])
         shell = await self._repo.get_shell(aas_id)
         if not shell:
-            return JSONResponse({"error": "Not found"}, status_code=404)
+            return error_response(ErrorCode.NOT_FOUND, "Not found", status_code=404)
         return JSONResponse(shell)
 
     async def handle_get_shell_refs(self, request: Request) -> JSONResponse:
@@ -323,7 +324,7 @@ class SandboxServer:
         sm_id = self._decode_path_id(request.path_params["sm_id"])
         submodel = await self._repo.get_submodel(sm_id)
         if not submodel:
-            return JSONResponse({"error": "Not found"}, status_code=404)
+            return error_response(ErrorCode.NOT_FOUND, "Not found", status_code=404)
         return JSONResponse(submodel)
 
     async def handle_get_element(self, request: Request) -> JSONResponse:
@@ -332,7 +333,7 @@ class SandboxServer:
         path = request.path_params["path"]
         element = await self._repo.get_element(sm_id, path)
         if not element:
-            return JSONResponse({"error": "Not found"}, status_code=404)
+            return error_response(ErrorCode.NOT_FOUND, "Not found", status_code=404)
         return JSONResponse(element)
 
     async def handle_get_value(self, request: Request) -> JSONResponse:
@@ -349,7 +350,7 @@ class SandboxServer:
         value = await request.json()
         if await self._repo.set_element_value(sm_id, path, value):
             return Response(status_code=204)
-        return JSONResponse({"error": "Not found"}, status_code=404)
+        return error_response(ErrorCode.NOT_FOUND, "Not found", status_code=404)
 
     async def handle_health(self, request: Request) -> JSONResponse:
         """Health check."""
