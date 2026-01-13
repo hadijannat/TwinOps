@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import random
 import time
 from typing import Any
 
@@ -17,6 +18,7 @@ from twinops.common.logging import get_logger
 from twinops.common.mqtt import MqttClient, MqttMessage
 from twinops.agent.twin_client import TwinClient, TwinClientError
 from twinops.common.metrics import record_mqtt_event
+from twinops.common.settings import Settings
 from twinops.common.tracing import span
 
 logger = get_logger(__name__)
@@ -39,6 +41,7 @@ class ShadowTwinManager:
         mqtt_client: MqttClient,
         aas_id: str,
         aas_repo_id: str,
+        settings: Settings,
         submodel_repo_id: str | None = None,
     ):
         """
@@ -57,6 +60,7 @@ class ShadowTwinManager:
         self._aas_id = aas_id
         self._aas_repo_id = aas_repo_id
         self._submodel_repo_id = submodel_repo_id if submodel_repo_id is not None else aas_repo_id
+        self._settings = settings
 
         self._lock = asyncio.Lock()
         self._state: dict[str, Any] = {
@@ -146,22 +150,38 @@ class ShadowTwinManager:
     async def _full_sync(self) -> None:
         """Fetch complete twin state via HTTP."""
         async with self._lock:
-            try:
-                with span("shadow_full_sync", {"aas.id": self._aas_id}):
-                    full_state = await self._twin_client.get_full_twin(self._aas_id)
-                self._state = full_state
-                sync_time = time.time()
-                self._last_sync_time = sync_time
-                # Update timestamps for all submodels
-                for sm_id in self._state["submodels"]:
-                    self._last_update_times[sm_id] = sync_time
-                logger.debug(
-                    "Full sync completed",
-                    submodel_count=len(self._state["submodels"]),
-                )
-            except TwinClientError as e:
-                logger.error("Full sync failed", error=str(e))
-                raise
+            delay = self._settings.shadow_sync_base_delay
+            for attempt in range(1, self._settings.shadow_sync_max_attempts + 1):
+                try:
+                    with span("shadow_full_sync", {"aas.id": self._aas_id}):
+                        full_state = await self._twin_client.get_full_twin(self._aas_id)
+                    self._state = full_state
+                    sync_time = time.time()
+                    self._last_sync_time = sync_time
+                    for sm_id in self._state["submodels"]:
+                        self._last_update_times[sm_id] = sync_time
+                    logger.debug(
+                        "Full sync completed",
+                        submodel_count=len(self._state["submodels"]),
+                    )
+                    return
+                except TwinClientError as e:
+                    retryable = e.status_code in {429, 500, 502, 503, 504} or e.status_code is None
+                    if not retryable or attempt >= self._settings.shadow_sync_max_attempts:
+                        logger.error("Full sync failed", error=str(e), attempt=attempt)
+                        raise
+                    sleep_for = min(delay, self._settings.shadow_sync_max_delay)
+                    jitter = sleep_for * self._settings.shadow_sync_jitter
+                    if jitter:
+                        sleep_for = max(0.0, sleep_for + random.uniform(-jitter, jitter))
+                    logger.warning(
+                        "Full sync failed; retrying",
+                        error=str(e),
+                        attempt=attempt,
+                        sleep_seconds=round(sleep_for, 2),
+                    )
+                    await asyncio.sleep(sleep_for)
+                    delay = min(self._settings.shadow_sync_max_delay, delay * 2)
 
     async def _on_mqtt_reconnect(self) -> None:
         """

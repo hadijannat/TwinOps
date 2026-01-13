@@ -604,6 +604,46 @@ class TwinClient:
                 raise TwinClientError(f"Failed to get job status: {text}", response.status)
             return await response.json()
 
+    async def get_delegated_job_status(
+        self,
+        delegation_url: str,
+        job_id: str,
+    ) -> dict[str, Any]:
+        """
+        Get delegated operation job status directly from opservice.
+
+        Args:
+            delegation_url: Delegated operation endpoint URL
+            job_id: Job identifier from async invocation
+
+        Returns:
+            Job status including state and result (if complete)
+        """
+        split = urlsplit(delegation_url)
+        base = f"{split.scheme}://{split.netloc}"
+        url = f"{base}/jobs/{job_id}"
+        headers: dict[str, str] = {}
+
+        if self._settings.opservice_auth_mode == "hmac":
+            secret = self._settings.opservice_hmac_secret
+            if secret:
+                timestamp = str(int(time.time()))
+                message = build_message(timestamp, "GET", f"/jobs/{job_id}", b"")
+                signature = sign(secret, message)
+                headers[self._settings.opservice_hmac_header] = signature
+                headers[self._settings.opservice_hmac_timestamp_header] = timestamp
+
+        logger.debug("Fetching delegated job status via HTTP", job_id=job_id, url=url)
+
+        response = await self._protected_request("GET", url, headers=headers)
+        async with response:
+            if response.status == 404:
+                raise TwinClientError(f"Job not found: {job_id}", response.status)
+            if response.status not in (200, 202):
+                text = await response.text()
+                raise TwinClientError(f"Failed to get delegated job status: {text}", response.status)
+            return await response.json()
+
     # === Batch Operations ===
 
     async def get_full_twin(self, aas_id: str) -> dict[str, Any]:

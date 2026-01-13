@@ -142,7 +142,7 @@ class RulesBasedClient(LlmClient):
         self,
         messages: list[Message],
         tools: list[dict[str, Any]] | None = None,
-        _system: str | None = None,
+        system: str | None = None,
     ) -> LlmResponse:
         """
         Parse the last user message and generate tool calls.
@@ -154,6 +154,8 @@ class RulesBasedClient(LlmClient):
         - Generic set/get/call patterns
         - Fuzzy tool name matching
         """
+        # System prompt is not used by the rules-based client.
+        _ = system
         # Find last user message
         user_msg = None
         for msg in reversed(messages):
@@ -244,10 +246,11 @@ class EchoClient(LlmClient):
     async def chat(
         self,
         messages: list[Message],
-        _tools: list[dict[str, Any]] | None = None,
-        _system: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        system: str | None = None,
     ) -> LlmResponse:
         """Echo the last message."""
+        _ = (tools, system)
         last_msg = messages[-1] if messages else None
         content = f"Echo: {last_msg.content}" if last_msg else "No message"
         return LlmResponse(content=content, finish_reason="stop")

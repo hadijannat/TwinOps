@@ -329,6 +329,7 @@ Environment variables (prefix: `TWINOPS_`):
 | `ANTHROPIC_API_KEY` | - | Anthropic API key |
 | `AAS_ID` | `urn:example:aas:pump-001` | Target AAS identifier |
 | `REPO_ID` | `default` | Repository ID for MQTT topics |
+| `RATE_LIMIT_RPM` | `60` | Request rate limit (requests per minute) |
 | `AUTH_MODE` | `none` | API auth mode (`none` or `mtls`) |
 | `AUTH_EXEMPT_PATHS` | `["/health","/ready"]` | Paths exempt from auth (JSON array) |
 | `OPSERVICE_AUTH_MODE` | `none` | Opservice auth mode (`none` or `hmac`) |
@@ -363,6 +364,10 @@ Environment variables (prefix: `TWINOPS_`):
 | `TOOL_IDEMPOTENCY_MAX_ENTRIES` | `1000` | Max tool idempotency entries |
 | `TOOL_IDEMPOTENCY_STORAGE` | `memory` | Idempotency storage backend (`memory`/`sqlite`) |
 | `TOOL_IDEMPOTENCY_SQLITE_PATH` | `data/idempotency.sqlite` | SQLite path for idempotency |
+| `SHADOW_SYNC_MAX_ATTEMPTS` | `5` | Max attempts for initial shadow sync |
+| `SHADOW_SYNC_BASE_DELAY` | `0.5` | Base delay for shadow sync retry backoff |
+| `SHADOW_SYNC_MAX_DELAY` | `5.0` | Max delay for shadow sync retry backoff |
+| `SHADOW_SYNC_JITTER` | `0.2` | Jitter ratio for shadow sync retry backoff |
 | `JOB_POLL_MAX_INTERVAL` | `5.0` | Max backoff for job polling |
 | `JOB_POLL_JITTER` | `0.1` | Jitter ratio for job polling |
 | `TWIN_CLIENT_FAILURE_THRESHOLD` | `5` | Circuit breaker failures before opening |

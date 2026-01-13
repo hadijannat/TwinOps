@@ -303,6 +303,7 @@ class AgentServer:
             mqtt_client=self._mqtt_client,
             aas_id=self._settings.aas_id,
             aas_repo_id=self._settings.effective_aas_repo_id,
+            settings=self._settings,
             submodel_repo_id=self._settings.effective_submodel_repo_id,
         )
 

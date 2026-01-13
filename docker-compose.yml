@@ -29,6 +29,7 @@ services:
     ports:
       - "8081:8081"
     environment:
+      - TWINOPS_RATE_LIMIT_RPM=${TWINOPS_RATE_LIMIT_RPM:-60}
       - TWINOPS_MQTT_BROKER_HOST=mqtt
       - TWINOPS_MQTT_BROKER_PORT=1883
       - TWINOPS_SANDBOX_PORT=8081
@@ -47,6 +48,7 @@ services:
     ports:
       - "8087:8087"
     environment:
+      - TWINOPS_RATE_LIMIT_RPM=${TWINOPS_RATE_LIMIT_RPM:-60}
       - TWINOPS_TWIN_BASE_URL=http://twin-sandbox:8081
       - TWINOPS_MQTT_BROKER_HOST=mqtt
       - TWINOPS_MQTT_BROKER_PORT=1883
@@ -64,6 +66,7 @@ services:
     ports:
       - "8080:8080"
     environment:
+      - TWINOPS_RATE_LIMIT_RPM=${TWINOPS_RATE_LIMIT_RPM:-60}
       - TWINOPS_TWIN_BASE_URL=http://twin-sandbox:8081
       - TWINOPS_MQTT_BROKER_HOST=mqtt
       - TWINOPS_MQTT_BROKER_PORT=1883

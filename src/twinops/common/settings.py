@@ -298,6 +298,22 @@ class Settings(BaseSettings):
         default=3600.0,
         description="Maximum time to wait for human approval",
     )
+    shadow_sync_max_attempts: int = Field(
+        default=5,
+        description="Max attempts for initial shadow twin sync",
+    )
+    shadow_sync_base_delay: float = Field(
+        default=0.5,
+        description="Base delay for shadow sync retry backoff",
+    )
+    shadow_sync_max_delay: float = Field(
+        default=5.0,
+        description="Max delay for shadow sync retry backoff",
+    )
+    shadow_sync_jitter: float = Field(
+        default=0.2,
+        description="Jitter ratio for shadow sync retry backoff",
+    )
 
     # Resilience / concurrency
     twin_client_failure_threshold: int = Field(

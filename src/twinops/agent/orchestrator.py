@@ -371,6 +371,7 @@ Be concise and focus on the task at hand."""
                 job_id=job_id,
                 submodel_id=tool.submodel_id,
                 operation_path=tool.operation_path,
+                delegation_url=tool.delegation_url,
             )
             record_outcome(
                 "success" if final_result.get("status") == "COMPLETED" else "error",
@@ -478,6 +479,7 @@ Be concise and focus on the task at hand."""
         job_id: str,
         submodel_id: str | None = None,
         operation_path: str | None = None,
+        delegation_url: str | None = None,
     ) -> dict[str, Any]:
         """
         Monitor an async job until completion.
@@ -494,6 +496,9 @@ Be concise and focus on the task at hand."""
             Job status dictionary
         """
         with span("job_monitor", {"job.id": job_id}):
+            if delegation_url:
+                return await self._monitor_delegated_job(job_id, delegation_url)
+
             policy = await self._safety.load_policy()
             start_time = time.time()
             polls_without_update = 0
@@ -587,6 +592,49 @@ Be concise and focus on the task at hand."""
 
             record_job_result("TIMEOUT", "shadow")
             return {"job_id": job_id, "status": "TIMEOUT"}
+
+    async def _monitor_delegated_job(
+        self,
+        job_id: str,
+        delegation_url: str,
+    ) -> dict[str, Any]:
+        """
+        Monitor a delegated opservice job until completion.
+
+        Delegated operations do not update the shadow twin, so poll the
+        opservice job endpoint directly.
+        """
+        start_time = time.time()
+        while time.time() - start_time < self._settings.job_timeout:
+            try:
+                http_status = await self._twin.get_delegated_job_status(
+                    delegation_url=delegation_url,
+                    job_id=job_id,
+                )
+                job_state = http_status.get("status") or http_status.get("executionState")
+                if job_state in ("COMPLETED", "FINISHED", "FAILED", "CANCELLED"):
+                    record_job_result(job_state, "delegated_http")
+                    return {
+                        "job_id": job_id,
+                        "status": job_state,
+                        "result": http_status.get("result"),
+                        "source": "delegated_http",
+                    }
+            except Exception as exc:
+                logger.warning(
+                    "Delegated job polling failed",
+                    job_id=job_id,
+                    error=str(exc),
+                )
+
+            interval = self._settings.job_poll_interval
+            if self._settings.job_poll_jitter:
+                jitter = interval * self._settings.job_poll_jitter
+                interval = max(0.1, interval + random.uniform(-jitter, jitter))
+            await asyncio.sleep(interval)
+
+        record_job_result("TIMEOUT", "delegated_http")
+        return {"job_id": job_id, "status": "TIMEOUT"}
 
     def _build_reply(
         self,
