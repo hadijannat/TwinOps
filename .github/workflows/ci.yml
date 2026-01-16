@@ -169,6 +169,8 @@ jobs:
         image: eclipse-mosquitto:2
         ports:
           - 1883:1883
+        volumes:
+          - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
         options: >-
           --health-cmd "mosquitto_sub -h localhost -t '$$SYS/broker/uptime' -C 1 -i healthcheck -W 10 || exit 1"
           --health-interval 10s
