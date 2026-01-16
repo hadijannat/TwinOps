@@ -170,10 +170,11 @@ jobs:
         ports:
           - 1883:1883
         options: >-
-          --health-cmd "mosquitto_sub -h localhost -t '$$SYS/#' -C 1 -i healthcheck -W 3 || exit 1"
+          --health-cmd "mosquitto_sub -h localhost -t '$$SYS/broker/uptime' -C 1 -i healthcheck -W 10 || exit 1"
           --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-timeout 10s
+          --health-retries 10
+          --health-start-period 20s
     steps:
       - uses: actions/checkout@v6
       - name: Set up Python 3.12
@@ -275,7 +276,7 @@ jobs:
 
       - name: Start services
         run: |
-          docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --no-build
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --no-build mqtt twin-sandbox opservice agent
           sleep 10
 
       - name: Check service health

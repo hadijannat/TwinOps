@@ -465,9 +465,11 @@ def create_app(settings: Settings | None = None) -> Starlette:
 
     app = Starlette(routes=routes, lifespan=lifespan)
 
+    burst_size = max(3.0, settings.rate_limit_rpm * 2 / 60.0)
     app.add_middleware(
         RateLimitMiddleware,
         requests_per_minute=settings.rate_limit_rpm,
+        burst_size=burst_size,
         exclude_paths=["/health", "/metrics"],
     )
     app.add_middleware(RequestIdMiddleware)
