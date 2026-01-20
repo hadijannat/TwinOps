@@ -91,7 +91,7 @@ jobs:
     name: Auto Assign Reviewers
     runs-on: ubuntu-latest
     steps:
-      - uses: kentaro-m/auto-assign-action@v2.0.0
+      - uses: kentaro-m/auto-assign-action@v2.0.1
         with:
           configuration-path: '.github/auto-assign.yml'
         continue-on-error: true
