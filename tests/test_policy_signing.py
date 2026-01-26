@@ -3,6 +3,8 @@
 import json
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from twinops.agent.policy_signing import (
     PolicyVerificationError,
@@ -18,11 +20,14 @@ class TestKeypairGeneration:
     def test_generate_keypair(self):
         """Test generating a key pair."""
         private_pem, public_pem = generate_keypair()
+        private_key = serialization.load_pem_private_key(
+            private_pem.encode("utf-8"),
+            password=None,
+        )
+        public_key = serialization.load_pem_public_key(public_pem.encode("utf-8"))
 
-        assert "-----BEGIN PRIVATE KEY-----" in private_pem
-        assert "-----END PRIVATE KEY-----" in private_pem
-        assert "-----BEGIN PUBLIC KEY-----" in public_pem
-        assert "-----END PUBLIC KEY-----" in public_pem
+        assert isinstance(private_key, ed25519.Ed25519PrivateKey)
+        assert isinstance(public_key, ed25519.Ed25519PublicKey)
 
     def test_keypairs_are_unique(self):
         """Test that each generation produces unique keys."""

@@ -1,0 +1,9 @@
+title = "TwinOps gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+commits = [
+  "275f8826baaf6542a7734b171c1c1431fce62592",
+]

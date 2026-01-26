@@ -72,7 +72,8 @@ jobs:
               filtered.append(stripped)
           pathlib.Path("requirements.txt").write_text("\n".join(filtered) + "\n")
           PY
-          pip-audit -r requirements.txt --strict --desc on
+          # TODO: remove ignore once CVE-2026-0994 has a fixed release in protobuf.
+          pip-audit -r requirements.txt --strict --desc on --ignore-vuln CVE-2026-0994
 
       - name: Run safety check
         run: |
