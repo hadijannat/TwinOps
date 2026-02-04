@@ -6,7 +6,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +31,7 @@ fcntl = fcntl_module
 logger = get_logger(__name__)
 
 
-class RiskLevel(str, Enum):
+class RiskLevel(StrEnum):
     """Operation risk levels."""
 
     LOW = "LOW"
@@ -40,7 +40,7 @@ class RiskLevel(str, Enum):
     CRITICAL = "CRITICAL"
 
 
-class TaskStatus(str, Enum):
+class TaskStatus(StrEnum):
     """Human-in-the-loop task status."""
 
     PENDING_APPROVAL = "PendingApproval"
