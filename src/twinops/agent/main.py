@@ -8,7 +8,7 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, cast
 
@@ -37,7 +37,7 @@ from twinops.common.tracing import setup_tracing
 logger = get_logger(__name__)
 
 
-class DependencyStatus(str, Enum):
+class DependencyStatus(StrEnum):
     """Status of a dependency check."""
 
     OK = "ok"
